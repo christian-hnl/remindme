@@ -20,6 +20,7 @@ model User {
   widgets      UserWidget[]
   schedule     ScheduleBlock[]
   reminders    Reminder[]
+  notes        Note[]
   untisConfig  WebUntisConfig?
 }
 
@@ -44,7 +45,7 @@ model Subject {
   userId    String?
   user      User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
-  untisCode String?         // z. B. 'M', 'PH', 'INF', 'BWL', 'L'
+  untisCode String?
   colorHex  String          @default("#6366f1")
   icon      String          @default("book")
   createdAt DateTime        @default(now())
@@ -64,8 +65,8 @@ model Task {
   description      String?
   dueDate          DateTime
   estimatedMinutes Int            @default(30)
-  priority         String         @default("medium") // 'low', 'medium', 'high', 'urgent'
-  status           String         @default("backlog") // 'backlog', 'in_progress', 'done', 'archived'
+  priority         String         @default("medium")
+  status           String         @default("backlog")
   isUntisSync      Boolean        @default(false)
   customMetadata   String?        @default("{}")
   createdAt        DateTime       @default(now())
@@ -79,33 +80,49 @@ model ScheduleBlock {
   subjectId        String?
   subject          Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   title            String
-  subjectCode      String?  // e.g. "M", "PH", "INF"
-  dayOfWeek        Int      @default(1) // 1 = Monday ... 5 = Friday, 7 = Sunday
-  startTime        String   // "09:00"
-  endTime          String   // "11:00"
-  room             String?  // e.g. "Raum 204", "Physiksaal 1"
-  teacher          String?  // e.g. "Hr. Weber", "Fr. Dr. Schneider"
+  subjectCode      String?
+  dayOfWeek        Int      @default(1)
+  startTime        String
+  endTime          String
+  room             String?
+  teacher          String?
   colorHex         String   @default("#8B5CF6")
   isCancelled      Boolean  @default(false)
-  substitutionNote String?  // e.g. "Vertretung Fr. Klein in R102"
+  substitutionNote String?
   externalUntisId  String?
   createdAt        DateTime @default(now())
   tasks            Task[]
 }
 
 model Reminder {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   userId        String?
-  user          User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title         String   // e.g. "Wäsche aufhängen / rausbringen"
-  category      String   @default("Haushalt") // "Haushalt", "Erledigung", "Gesundheit", "Paket"
-  dueTime       String?  // e.g. "18:30"
-  dueDate       DateTime @default(now())
-  isDone        Boolean  @default(false)
-  icon          String   @default("bell")
-  priority      String   @default("medium") // "low", "medium", "high"
-  repeatPattern String   @default("none") // "none", "daily", "weekly"
-  createdAt     DateTime @default(now())
+  user          User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  category      String    @default("Haushalt")
+  hasDueDate    Boolean   @default(true)
+  dueDate       DateTime?
+  dueTime       String?
+  personName    String?   // z. B. "Mama", "Hr. Weber", "Chris"
+  reminderType  String    @default("todo") // "say_to_person", "action", "errand"
+  isDone        Boolean   @default(false)
+  icon          String    @default("bell")
+  priority      String    @default("medium")
+  repeatPattern String    @default("none")
+  createdAt     DateTime  @default(now())
+}
+
+model Note {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  content   String
+  category  String   @default("Gedanken") // "Gedanken", "Uni", "Ideen", "Wichtig"
+  isPinned  Boolean  @default(false)
+  colorHex  String   @default("#6366F1")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model SavingsPot {

@@ -9,6 +9,7 @@ import {
   ScheduleBlock, 
   Subject, 
   Reminder,
+  Note,
   WorkspaceMode 
 } from '@/types';
 import { TopBar } from './TopBar';
@@ -27,6 +28,8 @@ import { CreatePotModal } from './wealth/CreatePotModal';
 import { AddTransactionModal } from './wealth/AddTransactionModal';
 import { RemindersHub } from './reminders/RemindersHub';
 import { WebUntisModal } from './webuntis/WebUntisModal';
+import { AppleSyncModal } from './calendar/AppleSyncModal';
+import { NotesHub } from './notes/NotesHub';
 import { 
   Sparkles, 
   Plus, 
@@ -38,7 +41,8 @@ import {
   ShieldCheck,
   Zap,
   Bell,
-  School
+  School,
+  FileText
 } from 'lucide-react';
 import { fireMilestoneGlow } from '@/lib/confetti';
 
@@ -57,6 +61,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
   const [isCreatePotOpen, setIsCreatePotOpen] = useState(false);
   const [isAddTxOpen, setIsAddTxOpen] = useState(false);
   const [isUntisModalOpen, setIsUntisModalOpen] = useState(false);
+  const [isAppleSyncOpen, setIsAppleSyncOpen] = useState(false);
   const [selectedPotForDeposit, setSelectedPotForDeposit] = useState<SavingsPot | null>(null);
 
   // Keyboard shortcut listener
@@ -74,10 +79,12 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
       } else if (e.key === '1') {
         setActiveMode('all');
       } else if (e.key === '2') {
-        setActiveMode('study');
+        setActiveMode('notes');
       } else if (e.key === '3') {
-        setActiveMode('wealth');
+        setActiveMode('study');
       } else if (e.key === '4') {
+        setActiveMode('wealth');
+      } else if (e.key === '5') {
         setActiveMode('weekend');
       }
     };
@@ -102,7 +109,6 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
   const handleToggleTaskStatus = async (task: Task) => {
     const newStatus = task.status === 'done' ? 'backlog' : 'done';
     
-    // 0ms Optimistic UI update across both tasks list and timetable blocks!
     setData((prev) => ({
       ...prev,
       tasks: prev.tasks.map((t) =>
@@ -198,8 +204,58 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
           ...prev,
           reminders: [created, ...prev.reminders],
         }));
-        fireMilestoneGlow();
       }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Note Actions
+  const handleAddNote = async (newNote: Partial<Note>): Promise<Note | void> => {
+    try {
+      const res = await fetch('/api/v1/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newNote),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        setData((prev) => ({
+          ...prev,
+          notes: [created, ...prev.notes],
+        }));
+        return created;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUpdateNote = async (id: string, updates: Partial<Note>) => {
+    setData((prev) => ({
+      ...prev,
+      notes: prev.notes.map((n) => (n.id === id ? { ...n, ...updates } : n)),
+    }));
+
+    try {
+      await fetch(`/api/v1/notes/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteNote = async (id: string) => {
+    setData((prev) => ({
+      ...prev,
+      notes: prev.notes.filter((n) => n.id !== id),
+    }));
+
+    try {
+      await fetch(`/api/v1/notes/${id}`, { method: 'DELETE' });
     } catch (err) {
       console.error(err);
     }
@@ -231,7 +287,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
     }
   };
 
-  const handleUntisSyncCompleted = (result: any) => {
+  const handleUntisSyncCompleted = () => {
     refreshSummary();
   };
 
@@ -246,9 +302,11 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
         onOpenCommand={() => setIsCommandOpen(true)}
         onOpenQuickAdd={() => setIsCreateTaskOpen(true)}
         onOpenUntisModal={() => setIsUntisModalOpen(true)}
+        onOpenAppleSyncModal={() => setIsAppleSyncOpen(true)}
         displayName={data.user?.displayName || 'Alexander'}
         untisConfig={data.untisConfig}
         pendingRemindersCount={pendingReminders.length}
+        notesCount={data.notes ? data.notes.length : 0}
       />
 
       <main className="mx-auto max-w-7xl px-4 sm:px-6 pt-6">
@@ -272,25 +330,28 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
             <span className="text-white/20">•</span>
             <span className="text-amber-300 font-medium flex items-center gap-1">
               <Bell className="h-3 w-3" />
-              {pendingReminders.length} Alltags-Erinnerungen
+              {pendingReminders.length} Erinnerungen
             </span>
             <span className="text-white/20 hidden sm:inline">•</span>
             <button
-              onClick={() => setIsUntisModalOpen(true)}
-              className="text-purple-300 hover:text-purple-200 font-medium hidden sm:inline"
+              onClick={() => setIsAppleSyncOpen(true)}
+              className="text-indigo-300 hover:text-indigo-200 font-medium hidden sm:inline flex items-center gap-1"
             >
-              🏫 {data.untisConfig?.schoolName || 'WebUntis verbunden'}
+              <Sparkles className="h-3 w-3 text-indigo-400" />
+              Apple Sync aktiv
             </button>
           </div>
 
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted text-[11px] hidden md:inline">
-              Aktiver Modus:
+              Ansicht:
             </span>
             <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white/5 border border-white/10 text-indigo-300 capitalize flex items-center gap-1">
               <Zap className="h-3 w-3 text-indigo-400" />
               {activeMode === 'all'
-                ? 'All-in-One'
+                ? 'Dashboard'
+                : activeMode === 'notes'
+                ? 'Gedanken & Notizen'
                 : activeMode === 'study'
                 ? 'Deep Study'
                 : activeMode === 'wealth'
@@ -299,6 +360,18 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
             </span>
           </div>
         </div>
+
+        {/* ========================================================================= */}
+        {/* WORKSPACE MODE 0: NOTIZEN & GEDANKEN (Apple Notes / Notion Style)         */}
+        {/* ========================================================================= */}
+        {activeMode === 'notes' && (
+          <NotesHub
+            notes={data.notes || []}
+            onAddNote={handleAddNote}
+            onUpdateNote={handleUpdateNote}
+            onDeleteNote={handleDeleteNote}
+          />
+        )}
 
         {/* ========================================================================= */}
         {/* WORKSPACE MODE 1: ALL-IN-ONE                                              */}
@@ -332,7 +405,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
                 openCreateTaskModal={() => setIsCreateTaskOpen(true)}
               />
 
-              {/* Reminders Hub: Wäsche, Pakete, Besorgungen */}
+              {/* Reminders Hub */}
               <RemindersHub
                 reminders={data.reminders || []}
                 onToggleReminder={handleToggleReminder}
@@ -393,7 +466,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
         )}
 
         {/* ========================================================================= */}
-        {/* WORKSPACE MODE 2: DEEP STUDY MODE (Pomodoro, Timetable, Tasks)            */}
+        {/* WORKSPACE MODE 2: DEEP STUDY MODE                                         */}
         {/* ========================================================================= */}
         {activeMode === 'study' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start animate-in fade-in duration-200">
@@ -544,6 +617,11 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
         onSyncCompleted={handleUntisSyncCompleted}
       />
 
+      <AppleSyncModal
+        isOpen={isAppleSyncOpen}
+        onClose={() => setIsAppleSyncOpen(false)}
+      />
+
       <CommandPalette
         isOpen={isCommandOpen}
         onClose={() => setIsCommandOpen(false)}
@@ -557,7 +635,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
         isOpen={isCreateTaskOpen}
         onClose={() => setIsCreateTaskOpen(false)}
         subjects={data.subjects}
-        onTaskCreated={(newTask) => {
+        onTaskCreated={() => {
           refreshSummary();
         }}
       />

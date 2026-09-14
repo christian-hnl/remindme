@@ -28,20 +28,36 @@ export async function POST(req: Request) {
     if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
 
     const body = await req.json();
-    const { title, category, dueTime, dueDate, icon, priority, repeatPattern } = body;
+    const { 
+      title, 
+      category, 
+      hasDueDate, 
+      dueTime, 
+      dueDate, 
+      personName, 
+      reminderType, 
+      icon, 
+      priority, 
+      repeatPattern 
+    } = body;
 
     if (!title) {
       return NextResponse.json({ error: 'Title is required' }, { status: 400 });
     }
 
+    const isDue = hasDueDate !== undefined ? !!hasDueDate : true;
+
     const reminder = await db.reminder.create({
       data: {
         userId: user.id,
         title: title.trim(),
-        category: category || 'Haushalt',
-        dueTime: dueTime || null,
-        dueDate: dueDate ? new Date(dueDate) : new Date(),
-        icon: icon || 'bell',
+        category: category || (personName ? 'Person' : 'Haushalt'),
+        hasDueDate: isDue,
+        dueDate: isDue && dueDate ? new Date(dueDate) : isDue ? new Date() : null,
+        dueTime: isDue ? (dueTime || null) : null,
+        personName: personName ? personName.trim() : null,
+        reminderType: reminderType || (personName ? 'say_to_person' : 'todo'),
+        icon: icon || (personName ? 'user' : 'bell'),
         priority: priority || 'medium',
         repeatPattern: repeatPattern || 'none',
         isDone: false,

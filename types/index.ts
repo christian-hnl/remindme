@@ -1,7 +1,7 @@
 export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskStatus = 'backlog' | 'in_progress' | 'done' | 'archived';
 export type TransactionType = 'income' | 'expense' | 'transfer_to_pot';
-export type WorkspaceMode = 'all' | 'study' | 'wealth' | 'weekend';
+export type WorkspaceMode = 'all' | 'study' | 'wealth' | 'weekend' | 'notes';
 
 export interface Subject {
   id: string;
@@ -33,9 +33,9 @@ export interface ScheduleBlock {
   subjectId?: string | null;
   subject?: Subject | null;
   subjectCode?: string | null;
-  dayOfWeek: number; // 1 = Monday ... 5 = Friday, 7 = Sunday
-  startTime: string; // "09:00"
-  endTime: string;   // "11:00"
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
   room?: string | null;
   teacher?: string | null;
   colorHex: string;
@@ -48,14 +48,28 @@ export interface ScheduleBlock {
 export interface Reminder {
   id: string;
   title: string;
-  category: string; // "Haushalt", "Erledigung", "Gesundheit", "Paket", "Sonstiges"
-  dueTime?: string | null; // "18:30"
-  dueDate: string; // ISO string
+  category: string; // "Haushalt", "Erledigung", "Gesundheit", "Person", "Sonstiges"
+  hasDueDate: boolean;
+  dueTime?: string | null; // e.g. "18:30"
+  dueDate?: string | null; // ISO string or null
+  personName?: string | null; // e.g. "Mama", "Herr Weber", "Lukas"
+  reminderType?: 'say_to_person' | 'action' | 'errand' | 'todo';
   isDone: boolean;
   icon: string;
   priority: 'low' | 'medium' | 'high';
   repeatPattern: 'none' | 'daily' | 'weekly';
   createdAt?: string;
+}
+
+export interface Note {
+  id: string;
+  title: string;
+  content: string;
+  category: string; // "Gedanken", "Uni", "Ideen", "Wichtig"
+  isPinned: boolean;
+  colorHex: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface WebUntisConfig {
@@ -105,6 +119,7 @@ export interface DashboardSummary {
     todaysStudyMinutes: number;
     fixedCostsCovered: boolean;
     pendingRemindersCount?: number;
+    notesCount?: number;
   };
   tasks: Task[];
   savingsPots: SavingsPot[];
@@ -112,5 +127,6 @@ export interface DashboardSummary {
   schedule: ScheduleBlock[];
   subjects: Subject[];
   reminders: Reminder[];
+  notes: Note[];
   untisConfig: WebUntisConfig | null;
 }

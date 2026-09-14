@@ -39,8 +39,8 @@ export const MiniCalendar: React.FC<MiniCalendarProps> = ({
     const isSelected = isSameDay(d, selectedDate);
     
     // Check if tasks exist on this date
-    const dayTasks = tasks.filter((t) => isSameDay(new Date(t.dueDate), d) && t.status !== 'done');
-    const dayReminders = reminders.filter((r) => isSameDay(new Date(r.dueDate), d) && !r.isDone);
+    const dayTasks = tasks.filter((t) => t.dueDate && isSameDay(new Date(t.dueDate), d) && t.status !== 'done');
+    const dayReminders = reminders.filter((r) => r.dueDate && isSameDay(new Date(r.dueDate), d) && !r.isDone);
 
     return {
       date: d,
@@ -55,8 +55,8 @@ export const MiniCalendar: React.FC<MiniCalendarProps> = ({
   });
 
   // Items for selected date
-  const selectedDateTasks = tasks.filter((t) => isSameDay(new Date(t.dueDate), selectedDate));
-  const selectedDateReminders = reminders.filter((r) => isSameDay(new Date(r.dueDate), selectedDate));
+  const selectedDateTasks = tasks.filter((t) => t.dueDate && isSameDay(new Date(t.dueDate), selectedDate));
+  const selectedDateReminders = reminders.filter((r) => r.dueDate && isSameDay(new Date(r.dueDate), selectedDate));
 
   return (
     <div className="rounded-3xl bg-[#11141D] border border-white/[0.06] p-5 shadow-bento glow-card">

@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { WorkspaceMode } from '@/types';
-import { Home, GraduationCap, Plus, Wallet, CalendarDays, Command } from 'lucide-react';
+import { Home, GraduationCap, Plus, Wallet, FileText, Command } from 'lucide-react';
 
 interface MobileDockProps {
   activeMode: WorkspaceMode;
@@ -22,7 +22,7 @@ export const MobileDock: React.FC<MobileDockProps> = ({
       <nav className="pointer-events-auto flex items-center gap-1 p-1.5 rounded-2xl glass-dock border border-white/10 shadow-2xl">
         <button
           onClick={() => setActiveMode('all')}
-          className={`flex flex-col items-center justify-center w-14 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
+          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
             activeMode === 'all'
               ? 'bg-white/15 text-white shadow-sm'
               : 'text-muted hover:text-white'
@@ -33,15 +33,15 @@ export const MobileDock: React.FC<MobileDockProps> = ({
         </button>
 
         <button
-          onClick={() => setActiveMode('study')}
-          className={`flex flex-col items-center justify-center w-14 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
-            activeMode === 'study'
+          onClick={() => setActiveMode('notes')}
+          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
+            activeMode === 'notes'
               ? 'bg-indigo-600/30 text-indigo-300 shadow-sm'
               : 'text-muted hover:text-white'
           }`}
         >
-          <GraduationCap className="h-4 w-4 mb-0.5" />
-          <span>Study</span>
+          <FileText className="h-4 w-4 mb-0.5" />
+          <span>Notizen</span>
         </button>
 
         {/* Center Prominent Quick-Add Button */}
@@ -53,8 +53,20 @@ export const MobileDock: React.FC<MobileDockProps> = ({
         </button>
 
         <button
+          onClick={() => setActiveMode('study')}
+          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
+            activeMode === 'study'
+              ? 'bg-indigo-600/30 text-indigo-300 shadow-sm'
+              : 'text-muted hover:text-white'
+          }`}
+        >
+          <GraduationCap className="h-4 w-4 mb-0.5" />
+          <span>Study</span>
+        </button>
+
+        <button
           onClick={() => setActiveMode('wealth')}
-          className={`flex flex-col items-center justify-center w-14 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
+          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
             activeMode === 'wealth'
               ? 'bg-emerald-600/30 text-emerald-300 shadow-sm'
               : 'text-muted hover:text-white'
@@ -62,14 +74,6 @@ export const MobileDock: React.FC<MobileDockProps> = ({
         >
           <Wallet className="h-4 w-4 mb-0.5" />
           <span>Geld</span>
-        </button>
-
-        <button
-          onClick={onOpenCommand}
-          className="flex flex-col items-center justify-center w-14 py-1.5 rounded-xl text-[10px] font-medium text-muted hover:text-white transition-all"
-        >
-          <Command className="h-4 w-4 mb-0.5 text-purple-400" />
-          <span>Cmd+K</span>
         </button>
       </nav>
     </div>

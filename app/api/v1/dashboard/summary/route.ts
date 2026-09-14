@@ -13,7 +13,7 @@ export async function GET() {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const [tasks, savingsPots, transactions, schedule, subjects, reminders, untisConfig] = await Promise.all([
+    const [tasks, savingsPots, transactions, schedule, subjects, reminders, notes, untisConfig] = await Promise.all([
       db.task.findMany({
         where: { userId: user.id },
         include: { subject: true, scheduleBlock: true },
@@ -53,7 +53,14 @@ export async function GET() {
         where: { userId: user.id },
         orderBy: [
           { isDone: 'asc' },
-          { dueDate: 'asc' },
+          { createdAt: 'desc' },
+        ],
+      }),
+      db.note.findMany({
+        where: { userId: user.id },
+        orderBy: [
+          { isPinned: 'desc' },
+          { updatedAt: 'desc' },
         ],
       }),
       db.webUntisConfig.findUnique({
@@ -107,6 +114,7 @@ export async function GET() {
         todaysStudyMinutes,
         fixedCostsCovered: true,
         pendingRemindersCount,
+        notesCount: notes.length,
       },
       tasks,
       savingsPots,
@@ -114,6 +122,7 @@ export async function GET() {
       schedule,
       subjects,
       reminders,
+      notes,
       untisConfig,
     });
   } catch (error) {
