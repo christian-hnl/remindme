@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String         @id @default(uuid())
+  email        String         @unique
+  displayName  String
+  preferences  String         @default("{\"theme\": \"dark\", \"currency\": \"EUR\", \"active_mode\": \"all\"}")
+  createdAt    DateTime       @default(now())
+  subjects     Subject[]
+  tasks        Task[]
+  savingsPots  SavingsPot[]
+  transactions Transaction[]
+  widgets      UserWidget[]
+  schedule     ScheduleBlock[]
+}
+
+model Subject {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  colorHex  String   @default("#6366f1")
+  icon      String   @default("book")
+  createdAt DateTime @default(now())
+  tasks     Task[]
+}
+
+model Task {
+  id               String   @id @default(uuid())
+  userId           String?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjectId        String?
+  subject          Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  title            String
+  description      String?
+  dueDate          DateTime
+  estimatedMinutes Int      @default(30)
+  priority         String   @default("medium") // 'low', 'medium', 'high', 'urgent'
+  status           String   @default("backlog") // 'backlog', 'in_progress', 'done', 'archived'
+  customMetadata   String?  @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model SavingsPot {
+  id                  String        @id @default(uuid())
+  userId              String?
+  user                User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                String
+  targetAmount        Float
+  currentAmount       Float         @default(0.0)
+  monthlyContribution Float         @default(0.0)
+  targetDate          DateTime?
+  icon                String        @default("piggy-bank")
+  colorHex            String        @default("#10b981")
+  isArchived          Boolean       @default(false)
+  createdAt           DateTime      @default(now())
+  transactions        Transaction[]
+}
+
+model Transaction {
+  id              String      @id @default(uuid())
+  userId          String?
+  user            User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  savingsPotId    String?
+  savingsPot      SavingsPot? @relation(fields: [savingsPotId], references: [id], onDelete: SetNull)
+  title           String
+  amount          Float
+  category        String // 'Fixkosten', 'Lebensmittel', 'Freizeit', 'Bildung', etc.
+  type            String // 'income', 'expense', 'transfer_to_pot'
+  isRecurring     Boolean     @default(false)
+  transactionDate DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+}
+
+model UserWidget {
+  id             String   @id @default(uuid())
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  widgetKey      String
+  title          String
+  layoutPosition String   @default("{\"col\": 1, \"row\": 1, \"width\": 1, \"height\": 1}")
+  config         String   @default("{}")
+  isVisible      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+}
+
+model ScheduleBlock {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  dayOfWeek Int      @default(1) // 1 = Monday, 7 = Sunday
+  startTime String   // e.g. "09:00"
+  endTime   String   // e.g. "11:30"
+  room      String?
+  colorHex  String   @default("#8B5CF6")
+  createdAt DateTime @default(now())
+}

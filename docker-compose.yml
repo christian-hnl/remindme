@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Datenbank (Production Storage)
+  db:
+    image: postgres:16-alpine
+    container_name: life_dashboard_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dashboard_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supersecretpassword123}
+      POSTGRES_DB: ${POSTGRES_DB:-life_dashboard}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - dashboard_net
+
+  # 2. Web App (Client & Server Backend)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: life_dashboard_app
+    restart: always
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-dashboard_user}:${POSTGRES_PASSWORD:-supersecretpassword123}@db:5432/${POSTGRES_DB:-life_dashboard}?schema=public"
+      PORT: 3000
+    networks:
+      - dashboard_net
+
+  # 3. Caddy Reverse Proxy (Automatisches SSL-Zertifikat)
+  caddy:
+    image: caddy:2-alpine
+    container_name: life_dashboard_proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:-localhost}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - dashboard_net
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  dashboard_net:
+    driver: bridge
