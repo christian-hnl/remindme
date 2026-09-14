@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const tasks = await db.task.findMany({
-      include: { subject: true },
+      include: { subject: true, scheduleBlock: true },
       orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
     });
     return NextResponse.json(tasks);
@@ -18,7 +18,7 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { title, description, dueDate, estimatedMinutes, priority, subjectId, subjectName } = body;
+    const { title, description, dueDate, estimatedMinutes, priority, subjectId, subjectName, scheduleBlockId } = body;
 
     if (!title) {
       return NextResponse.json({ error: 'Title is required' }, { status: 400 });
@@ -31,7 +31,6 @@ export async function POST(req: Request) {
 
     let finalSubjectId = subjectId;
     if (!finalSubjectId && subjectName) {
-      // Find or create subject
       let subj = await db.subject.findFirst({
         where: { name: { equals: subjectName } },
       });
@@ -47,10 +46,23 @@ export async function POST(req: Request) {
       finalSubjectId = subj.id;
     }
 
+    // Auto-connect to ScheduleBlock if not explicitly given
+    let finalScheduleBlockId = scheduleBlockId || null;
+    if (!finalScheduleBlockId && finalSubjectId) {
+      const matchingBlock = await db.scheduleBlock.findFirst({
+        where: { userId: user.id, subjectId: finalSubjectId },
+        orderBy: { dayOfWeek: 'asc' },
+      });
+      if (matchingBlock) {
+        finalScheduleBlockId = matchingBlock.id;
+      }
+    }
+
     const task = await db.task.create({
       data: {
         userId: user.id,
         subjectId: finalSubjectId || null,
+        scheduleBlockId: finalScheduleBlockId,
         title,
         description: description || null,
         dueDate: dueDate ? new Date(dueDate) : new Date(),
@@ -58,7 +70,7 @@ export async function POST(req: Request) {
         priority: priority || 'medium',
         status: 'backlog',
       },
-      include: { subject: true },
+      include: { subject: true, scheduleBlock: true },
     });
 
     return NextResponse.json(task, { status: 201 });

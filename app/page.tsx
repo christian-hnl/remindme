@@ -1,38 +1,73 @@
 import { db } from '@/lib/db';
 import { DashboardContainer } from '@/components/DashboardContainer';
 import { DashboardSummary } from '@/types';
+import { syncWebUntisData } from '@/lib/webuntis';
 
 export const dynamic = 'force-dynamic';
 
 async function getDashboardData(): Promise<DashboardSummary> {
-  const user = await db.user.findFirst({
+  let user = await db.user.findFirst({
     where: { email: 'alexander@example.com' },
   });
 
   if (!user) {
-    // Fallback data if DB was not seeded yet
-    return {
-      user: { displayName: 'Alexander', email: 'alexander@example.com' },
-      metrics: {
-        totalBalance: 2840.5,
-        safeToSpendDaily: 24.5,
-        monthlySavingsRate: 250.0,
-        urgentTasksCount: 2,
-        todaysStudyMinutes: 75,
-        fixedCostsCovered: true,
+    user = await db.user.create({
+      data: {
+        email: 'alexander@example.com',
+        displayName: 'Alexander',
       },
-      tasks: [],
-      savingsPots: [],
-      transactions: [],
-      schedule: [],
-      subjects: [],
-    };
+    });
   }
 
-  const [tasks, savingsPots, transactions, schedule, subjects] = await Promise.all([
+  // Check if WebUntis is synced, if not sync initial schedule
+  const untisConfig = await db.webUntisConfig.findUnique({
+    where: { userId: user.id },
+  });
+  if (!untisConfig) {
+    await syncWebUntisData(user.id);
+  }
+
+  // Ensure default reminders exist if empty
+  const reminderCount = await db.reminder.count({ where: { userId: user.id } });
+  if (reminderCount === 0) {
+    await db.reminder.createMany({
+      data: [
+        {
+          userId: user.id,
+          title: 'Wäsche rausbringen / aufhängen',
+          category: 'Haushalt',
+          dueTime: '18:30',
+          dueDate: new Date(),
+          icon: 'shirt',
+          priority: 'medium',
+        },
+        {
+          userId: user.id,
+          title: 'Paket aus Packstation abholen (DHL Code 842)',
+          category: 'Erledigung',
+          dueTime: '17:00',
+          dueDate: new Date(),
+          icon: 'package',
+          priority: 'high',
+        },
+        {
+          userId: user.id,
+          title: 'Vitamine & Omega-3 nehmen',
+          category: 'Gesundheit',
+          dueTime: '08:30',
+          dueDate: new Date(),
+          icon: 'pill',
+          priority: 'low',
+          repeatPattern: 'daily',
+        },
+      ],
+    });
+  }
+
+  const [tasks, savingsPots, transactions, schedule, subjects, reminders, freshUntisConfig] = await Promise.all([
     db.task.findMany({
       where: { userId: user.id },
-      include: { subject: true },
+      include: { subject: true, scheduleBlock: true },
       orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
     }),
     db.savingsPot.findMany({
@@ -46,11 +81,31 @@ async function getDashboardData(): Promise<DashboardSummary> {
     }),
     db.scheduleBlock.findMany({
       where: { userId: user.id },
-      orderBy: { startTime: 'asc' },
+      include: {
+        subject: true,
+        tasks: {
+          where: { status: { not: 'archived' } },
+          include: { subject: true },
+        },
+      },
+      orderBy: [
+        { dayOfWeek: 'asc' },
+        { startTime: 'asc' },
+      ],
     }),
     db.subject.findMany({
       where: { userId: user.id },
       orderBy: { name: 'asc' },
+    }),
+    db.reminder.findMany({
+      where: { userId: user.id },
+      orderBy: [
+        { isDone: 'asc' },
+        { dueDate: 'asc' },
+      ],
+    }),
+    db.webUntisConfig.findUnique({
+      where: { userId: user.id },
     }),
   ]);
 
@@ -82,6 +137,8 @@ async function getDashboardData(): Promise<DashboardSummary> {
     .filter((t) => t.status !== 'done')
     .reduce((acc, t) => acc + t.estimatedMinutes, 0);
 
+  const pendingRemindersCount = reminders.filter((r) => !r.isDone).length;
+
   return {
     user: {
       displayName: user.displayName,
@@ -94,12 +151,15 @@ async function getDashboardData(): Promise<DashboardSummary> {
       urgentTasksCount,
       todaysStudyMinutes,
       fixedCostsCovered: true,
+      pendingRemindersCount,
     },
     tasks: JSON.parse(JSON.stringify(tasks)),
     savingsPots: JSON.parse(JSON.stringify(savingsPots)),
     transactions: JSON.parse(JSON.stringify(transactions)),
     schedule: JSON.parse(JSON.stringify(schedule)),
     subjects: JSON.parse(JSON.stringify(subjects)),
+    reminders: JSON.parse(JSON.stringify(reminders)),
+    untisConfig: freshUntisConfig ? JSON.parse(JSON.stringify(freshUntisConfig)) : null,
   };
 }
 

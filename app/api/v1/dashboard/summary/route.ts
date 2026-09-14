@@ -13,10 +13,10 @@ export async function GET() {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const [tasks, savingsPots, transactions, schedule, subjects] = await Promise.all([
+    const [tasks, savingsPots, transactions, schedule, subjects, reminders, untisConfig] = await Promise.all([
       db.task.findMany({
         where: { userId: user.id },
-        include: { subject: true },
+        include: { subject: true, scheduleBlock: true },
         orderBy: [
           { status: 'asc' },
           { dueDate: 'asc' },
@@ -33,11 +33,31 @@ export async function GET() {
       }),
       db.scheduleBlock.findMany({
         where: { userId: user.id },
-        orderBy: { startTime: 'asc' },
+        include: {
+          subject: true,
+          tasks: {
+            where: { status: { not: 'archived' } },
+            include: { subject: true },
+          },
+        },
+        orderBy: [
+          { dayOfWeek: 'asc' },
+          { startTime: 'asc' },
+        ],
       }),
       db.subject.findMany({
         where: { userId: user.id },
         orderBy: { name: 'asc' },
+      }),
+      db.reminder.findMany({
+        where: { userId: user.id },
+        orderBy: [
+          { isDone: 'asc' },
+          { dueDate: 'asc' },
+        ],
+      }),
+      db.webUntisConfig.findUnique({
+        where: { userId: user.id },
       }),
     ]);
 
@@ -50,15 +70,14 @@ export async function GET() {
       .filter((t) => t.type === 'expense' || t.type === 'transfer_to_pot')
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
-    const totalBalance = 2840.50 + (incomeTotal - expenseTotal); // base realistic liquidity
+    const totalBalance = 2840.50 + (incomeTotal - expenseTotal);
     const monthlySavingsRate = savingsPots.reduce((acc, p) => acc + p.monthlyContribution, 0);
 
-    // Dynamic Safe-to-Spend Calculation (Inspired by Finanzguru & Copilot)
-    // Remaining days in current month
+    // Dynamic Safe-to-Spend
     const now = new Date();
     const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const remainingDays = Math.max(1, lastDayOfMonth - now.getDate() + 1);
-    const discretionaryBudget = 580.00; // unallocated free budget for month
+    const discretionaryBudget = 580.00;
     const todaysSpent = transactions
       .filter((t) => {
         const d = new Date(t.transactionDate);
@@ -68,11 +87,12 @@ export async function GET() {
 
     const safeToSpendDaily = Math.max(0, +(discretionaryBudget / remainingDays - todaysSpent).toFixed(2));
 
-    // Tasks metrics
     const urgentTasksCount = tasks.filter((t) => t.status !== 'done' && (t.priority === 'urgent' || t.priority === 'high')).length;
     const todaysStudyMinutes = tasks
       .filter((t) => t.status !== 'done')
       .reduce((acc, t) => acc + t.estimatedMinutes, 0);
+
+    const pendingRemindersCount = reminders.filter((r) => !r.isDone).length;
 
     return NextResponse.json({
       user: {
@@ -81,17 +101,20 @@ export async function GET() {
       },
       metrics: {
         totalBalance,
-        safeToSpendDaily: safeToSpendDaily || 24.50, // default graceful fallback
+        safeToSpendDaily: safeToSpendDaily || 24.50,
         monthlySavingsRate: monthlySavingsRate || 250.0,
         urgentTasksCount,
         todaysStudyMinutes,
         fixedCostsCovered: true,
+        pendingRemindersCount,
       },
       tasks,
       savingsPots,
       transactions,
       schedule,
       subjects,
+      reminders,
+      untisConfig,
     });
   } catch (error) {
     console.error('API Error /dashboard/summary:', error);

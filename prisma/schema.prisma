@@ -8,45 +8,104 @@ datasource db {
 }
 
 model User {
-  id           String         @id @default(uuid())
-  email        String         @unique
+  id           String          @id @default(uuid())
+  email        String          @unique
   displayName  String
-  preferences  String         @default("{\"theme\": \"dark\", \"currency\": \"EUR\", \"active_mode\": \"all\"}")
-  createdAt    DateTime       @default(now())
+  preferences  String          @default("{\"theme\": \"dark\", \"currency\": \"EUR\", \"active_mode\": \"all\"}")
+  createdAt    DateTime        @default(now())
   subjects     Subject[]
   tasks        Task[]
   savingsPots  SavingsPot[]
   transactions Transaction[]
   widgets      UserWidget[]
   schedule     ScheduleBlock[]
+  reminders    Reminder[]
+  untisConfig  WebUntisConfig?
+}
+
+model WebUntisConfig {
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school      String    @default("gym-st-michael")
+  schoolName  String    @default("Gymnasium St. Michael")
+  server      String    @default("arche.webuntis.com")
+  username    String    @default("alexander.student")
+  password    String?
+  isConnected Boolean   @default(true)
+  lastSyncAt  DateTime?
+  autoSync    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model Subject {
-  id        String   @id @default(uuid())
+  id        String          @id @default(uuid())
   userId    String?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
-  colorHex  String   @default("#6366f1")
-  icon      String   @default("book")
-  createdAt DateTime @default(now())
+  untisCode String?         // z. B. 'M', 'PH', 'INF', 'BWL', 'L'
+  colorHex  String          @default("#6366f1")
+  icon      String          @default("book")
+  createdAt DateTime        @default(now())
   tasks     Task[]
+  lessons   ScheduleBlock[]
 }
 
 model Task {
+  id               String         @id @default(uuid())
+  userId           String?
+  user             User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjectId        String?
+  subject          Subject?       @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  scheduleBlockId  String?
+  scheduleBlock    ScheduleBlock? @relation(fields: [scheduleBlockId], references: [id], onDelete: SetNull)
+  title            String
+  description      String?
+  dueDate          DateTime
+  estimatedMinutes Int            @default(30)
+  priority         String         @default("medium") // 'low', 'medium', 'high', 'urgent'
+  status           String         @default("backlog") // 'backlog', 'in_progress', 'done', 'archived'
+  isUntisSync      Boolean        @default(false)
+  customMetadata   String?        @default("{}")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+}
+
+model ScheduleBlock {
   id               String   @id @default(uuid())
   userId           String?
   user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   subjectId        String?
   subject          Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   title            String
-  description      String?
-  dueDate          DateTime
-  estimatedMinutes Int      @default(30)
-  priority         String   @default("medium") // 'low', 'medium', 'high', 'urgent'
-  status           String   @default("backlog") // 'backlog', 'in_progress', 'done', 'archived'
-  customMetadata   String?  @default("{}")
+  subjectCode      String?  // e.g. "M", "PH", "INF"
+  dayOfWeek        Int      @default(1) // 1 = Monday ... 5 = Friday, 7 = Sunday
+  startTime        String   // "09:00"
+  endTime          String   // "11:00"
+  room             String?  // e.g. "Raum 204", "Physiksaal 1"
+  teacher          String?  // e.g. "Hr. Weber", "Fr. Dr. Schneider"
+  colorHex         String   @default("#8B5CF6")
+  isCancelled      Boolean  @default(false)
+  substitutionNote String?  // e.g. "Vertretung Fr. Klein in R102"
+  externalUntisId  String?
   createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  tasks            Task[]
+}
+
+model Reminder {
+  id            String   @id @default(uuid())
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String   // e.g. "Wäsche aufhängen / rausbringen"
+  category      String   @default("Haushalt") // "Haushalt", "Erledigung", "Gesundheit", "Paket"
+  dueTime       String?  // e.g. "18:30"
+  dueDate       DateTime @default(now())
+  isDone        Boolean  @default(false)
+  icon          String   @default("bell")
+  priority      String   @default("medium") // "low", "medium", "high"
+  repeatPattern String   @default("none") // "none", "daily", "weekly"
+  createdAt     DateTime @default(now())
 }
 
 model SavingsPot {
@@ -73,8 +132,8 @@ model Transaction {
   savingsPot      SavingsPot? @relation(fields: [savingsPotId], references: [id], onDelete: SetNull)
   title           String
   amount          Float
-  category        String // 'Fixkosten', 'Lebensmittel', 'Freizeit', 'Bildung', etc.
-  type            String // 'income', 'expense', 'transfer_to_pot'
+  category        String
+  type            String
   isRecurring     Boolean     @default(false)
   transactionDate DateTime    @default(now())
   createdAt       DateTime    @default(now())
@@ -90,17 +149,4 @@ model UserWidget {
   config         String   @default("{}")
   isVisible      Boolean  @default(true)
   createdAt      DateTime @default(now())
-}
-
-model ScheduleBlock {
-  id        String   @id @default(uuid())
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title     String
-  dayOfWeek Int      @default(1) // 1 = Monday, 7 = Sunday
-  startTime String   // e.g. "09:00"
-  endTime   String   // e.g. "11:30"
-  room      String?
-  colorHex  String   @default("#8B5CF6")
-  createdAt DateTime @default(now())
 }

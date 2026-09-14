@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { WorkspaceMode } from '@/types';
+import { WorkspaceMode, WebUntisConfig } from '@/types';
 import { 
   Command, 
   Plus, 
@@ -10,7 +10,8 @@ import {
   Coffee, 
   LayoutGrid, 
   Sparkles,
-  CalendarDays
+  School,
+  Bell
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -18,7 +19,10 @@ interface TopBarProps {
   setActiveMode: (mode: WorkspaceMode) => void;
   onOpenCommand: () => void;
   onOpenQuickAdd: () => void;
+  onOpenUntisModal: () => void;
   displayName: string;
+  untisConfig: WebUntisConfig | null;
+  pendingRemindersCount?: number;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -26,13 +30,16 @@ export const TopBar: React.FC<TopBarProps> = ({
   setActiveMode,
   onOpenCommand,
   onOpenQuickAdd,
+  onOpenUntisModal,
   displayName,
+  untisConfig,
+  pendingRemindersCount = 0,
 }) => {
   return (
     <header className="sticky top-0 z-30 w-full border-b border-[rgba(255,255,255,0.06)] bg-[#07090E]/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
         
-        {/* Brand & Mode Indicator */}
+        {/* Brand & WebUntis Indicator */}
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-md shadow-indigo-500/20">
             <Sparkles className="h-4 w-4 text-white" />
@@ -40,17 +47,22 @@ export const TopBar: React.FC<TopBarProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="font-semibold text-white tracking-tight">LifeTracker</span>
-              <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                PRO
-              </span>
+              <button
+                onClick={onOpenUntisModal}
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-300 border border-purple-500/20 hover:bg-purple-500/20 transition-colors"
+                title="Klicken für WebUntis Konfiguration"
+              >
+                <School className="h-2.5 w-2.5 text-purple-400" />
+                <span>{untisConfig?.schoolName || 'WebUntis Live'}</span>
+              </button>
             </div>
             <p className="text-[11px] text-muted hidden md:block">
-              Apple & Things 3 × Linear & Copilot
+              WebUntis Stundenplan & Hausaufgaben • Things 3 • Copilot
             </p>
           </div>
         </div>
 
-        {/* Mode Switcher Tabs (Anti-Clutter Architecture) */}
+        {/* Mode Switcher Tabs */}
         <div className="hidden lg:flex items-center gap-1 rounded-2xl bg-[#11141D] p-1 border border-[rgba(255,255,255,0.06)]">
           <button
             onClick={() => setActiveMode('all')}
