@@ -8,6 +8,7 @@ interface CreateTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
   subjects: Subject[];
+  initialSubjectId?: string | null;
   onTaskCreated: (task: any) => void;
 }
 
@@ -15,13 +16,20 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
   isOpen,
   onClose,
   subjects,
+  initialSubjectId,
   onTaskCreated,
 }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [subjectId, setSubjectId] = useState<string>('');
+  const [subjectId, setSubjectId] = useState<string>(initialSubjectId || '');
   const [estimatedMinutes, setEstimatedMinutes] = useState<number>(30);
   const [priority, setPriority] = useState<Priority>('medium');
+
+  React.useEffect(() => {
+    if (initialSubjectId) {
+      setSubjectId(initialSubjectId);
+    }
+  }, [initialSubjectId, isOpen]);
   const [dueDateStr, setDueDateStr] = useState<string>(() => {
     const d = new Date();
     d.setHours(18, 0, 0, 0);

@@ -84,7 +84,7 @@ export async function GET() {
     const now = new Date();
     const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const remainingDays = Math.max(1, lastDayOfMonth - now.getDate() + 1);
-    const discretionaryBudget = 580.00;
+    const discretionaryBudget = user.monthlyBudget ?? 580.00;
     const todaysSpent = transactions
       .filter((t) => {
         const d = new Date(t.transactionDate);
@@ -103,8 +103,10 @@ export async function GET() {
 
     return NextResponse.json({
       user: {
+        id: user.id,
         displayName: user.displayName,
         email: user.email,
+        monthlyBudget: user.monthlyBudget ?? 580.00,
       },
       metrics: {
         totalBalance,

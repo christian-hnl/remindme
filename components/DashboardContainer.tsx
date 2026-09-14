@@ -30,6 +30,7 @@ import { RemindersHub } from './reminders/RemindersHub';
 import { WebUntisModal } from './webuntis/WebUntisModal';
 import { AppleSyncModal } from './calendar/AppleSyncModal';
 import { NotesHub } from './notes/NotesHub';
+import { SettingsModal } from './settings/SettingsModal';
 import { 
   Sparkles, 
   Plus, 
@@ -62,6 +63,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
   const [isAddTxOpen, setIsAddTxOpen] = useState(false);
   const [isUntisModalOpen, setIsUntisModalOpen] = useState(false);
   const [isAppleSyncOpen, setIsAppleSyncOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedPotForDeposit, setSelectedPotForDeposit] = useState<SavingsPot | null>(null);
 
   // Keyboard shortcut listener
@@ -76,6 +78,9 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
       } else if (e.key.toLowerCase() === 'u') {
         e.preventDefault();
         setIsUntisModalOpen(true);
+      } else if (e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        setIsSettingsOpen(true);
       } else if (e.key === '1') {
         setActiveMode('all');
       } else if (e.key === '2') {
@@ -303,6 +308,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
         onOpenQuickAdd={() => setIsCreateTaskOpen(true)}
         onOpenUntisModal={() => setIsUntisModalOpen(true)}
         onOpenAppleSyncModal={() => setIsAppleSyncOpen(true)}
+        onOpenSettingsModal={() => setIsSettingsOpen(true)}
         displayName={data.user?.displayName || 'Alexander'}
         untisConfig={data.untisConfig}
         pendingRemindersCount={pendingReminders.length}
@@ -382,8 +388,13 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
             <div className="lg:col-span-4 space-y-6">
               <TimetableSchedule
                 schedule={data.schedule}
+                subjects={data.subjects}
                 onToggleTaskStatus={handleToggleTaskStatus}
                 onOpenUntisModal={() => setIsUntisModalOpen(true)}
+                onOpenCreateTask={(subjId) => {
+                  setSelectedSubjectId(subjId || null);
+                  setIsCreateTaskOpen(true);
+                }}
               />
 
               <MiniCalendar
@@ -497,8 +508,13 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
 
               <TimetableSchedule
                 schedule={data.schedule}
+                subjects={data.subjects}
                 onToggleTaskStatus={handleToggleTaskStatus}
                 onOpenUntisModal={() => setIsUntisModalOpen(true)}
+                onOpenCreateTask={(subjId) => {
+                  setSelectedSubjectId(subjId || null);
+                  setIsCreateTaskOpen(true);
+                }}
               />
 
               <TaskMatrix
@@ -633,8 +649,12 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
 
       <CreateTaskModal
         isOpen={isCreateTaskOpen}
-        onClose={() => setIsCreateTaskOpen(false)}
+        onClose={() => {
+          setIsCreateTaskOpen(false);
+          setSelectedSubjectId(null);
+        }}
         subjects={data.subjects}
+        initialSubjectId={selectedSubjectId}
         onTaskCreated={() => {
           refreshSummary();
         }}
@@ -663,6 +683,23 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({ initialD
         onClose={() => setIsAddTxOpen(false)}
         onTransactionCreated={() => {
           refreshSummary();
+        }}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        user={data.user}
+        untisConfig={data.untisConfig}
+        subjects={data.subjects}
+        onSettingsSaved={() => refreshSummary()}
+        onOpenUntisModal={() => {
+          setIsSettingsOpen(false);
+          setIsUntisModalOpen(true);
+        }}
+        onOpenAppleSyncModal={() => {
+          setIsSettingsOpen(false);
+          setIsAppleSyncOpen(true);
         }}
       />
     </div>

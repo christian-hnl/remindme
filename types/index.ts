@@ -78,6 +78,7 @@ export interface WebUntisConfig {
   schoolName: string;
   server: string;
   username: string;
+  icalUrl?: string | null;
   isConnected: boolean;
   lastSyncAt?: string | null;
   autoSync: boolean;
@@ -108,8 +109,10 @@ export interface Transaction {
 
 export interface DashboardSummary {
   user: {
+    id?: string;
     displayName: string;
     email: string;
+    monthlyBudget?: number;
   };
   metrics: {
     totalBalance: number;

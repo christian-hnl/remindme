@@ -12,7 +12,8 @@ import {
   Sparkles,
   School,
   Calendar,
-  FileText
+  FileText,
+  Settings
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -22,6 +23,7 @@ interface TopBarProps {
   onOpenQuickAdd: () => void;
   onOpenUntisModal: () => void;
   onOpenAppleSyncModal: () => void;
+  onOpenSettingsModal: () => void;
   displayName: string;
   untisConfig: WebUntisConfig | null;
   pendingRemindersCount?: number;
@@ -35,6 +37,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenQuickAdd,
   onOpenUntisModal,
   onOpenAppleSyncModal,
+  onOpenSettingsModal,
   displayName,
   untisConfig,
   pendingRemindersCount = 0,
@@ -148,15 +151,15 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           {/* Apple Sync Button for Mobile/Tablet */}
           <button
             onClick={onOpenAppleSyncModal}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#11141D] border border-white/[0.07] text-xs text-muted hover:text-white hover:border-indigo-500/30 transition-colors"
+            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#11141D] border border-white/[0.07] text-xs text-muted hover:text-white hover:border-indigo-500/30 transition-colors"
             title="Apple Kalender Live-Sync"
           >
             <Calendar className="h-3.5 w-3.5 text-indigo-400" />
-            <span className="hidden sm:inline">Apple Sync</span>
+            <span>Apple Sync</span>
           </button>
 
           {/* Global Search Button */}
@@ -183,9 +186,25 @@ export const TopBar: React.FC<TopBarProps> = ({
             <kbd className="hidden md:inline text-[10px] opacity-75 font-mono">Q</kbd>
           </button>
 
+          {/* Settings Hub Button */}
+          <button
+            id="settings-hub-btn"
+            onClick={onOpenSettingsModal}
+            className="group flex items-center gap-1.5 rounded-xl bg-[#11141D] px-2.5 py-1.5 text-xs text-muted border border-[rgba(255,255,255,0.06)] hover:border-purple-500/40 hover:text-white transition-all shadow-sm"
+            title="Einstellungen & Integrationen (WebUntis, Apple, Budget)"
+          >
+            <Settings className="h-3.5 w-3.5 text-purple-400 group-hover:rotate-45 transition-transform duration-300" />
+            <span className="hidden sm:inline font-medium">Einstellungen</span>
+            <kbd className="hidden md:inline text-[10px] opacity-60 font-mono">S</kbd>
+          </button>
+
           {/* User Status / Avatar */}
           <div className="flex items-center gap-2 pl-1">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#1A1F2C] border border-white/10 text-xs font-semibold text-indigo-300">
+            <div 
+              onClick={onOpenSettingsModal}
+              className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#1A1F2C] border border-white/10 text-xs font-semibold text-indigo-300 hover:border-purple-500/40 cursor-pointer transition-colors"
+              title="Profil & Einstellungen"
+            >
               {displayName.charAt(0)}
             </div>
           </div>

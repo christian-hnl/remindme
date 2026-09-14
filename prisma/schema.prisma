@@ -11,6 +11,7 @@ model User {
   id           String          @id @default(uuid())
   email        String          @unique
   displayName  String
+  monthlyBudget Float          @default(580.0)
   preferences  String          @default("{\"theme\": \"dark\", \"currency\": \"EUR\", \"active_mode\": \"all\"}")
   createdAt    DateTime        @default(now())
   subjects     Subject[]
@@ -33,6 +34,7 @@ model WebUntisConfig {
   server      String    @default("arche.webuntis.com")
   username    String    @default("alexander.student")
   password    String?
+  icalUrl     String?
   isConnected Boolean   @default(true)
   lastSyncAt  DateTime?
   autoSync    Boolean   @default(true)
