@@ -1,81 +1,56 @@
 'use client';
 
 import React from 'react';
-import { WorkspaceMode } from '@/types';
-import { Home, GraduationCap, Plus, Wallet, FileText, Command } from 'lucide-react';
+import type { WorkspaceMode } from '@/types';
+import { Plus } from 'lucide-react';
+import { MODE_META } from './modes';
 
 interface MobileDockProps {
   activeMode: WorkspaceMode;
   setActiveMode: (mode: WorkspaceMode) => void;
   onOpenQuickAdd: () => void;
-  onOpenCommand: () => void;
 }
 
-export const MobileDock: React.FC<MobileDockProps> = ({
-  activeMode,
-  setActiveMode,
-  onOpenQuickAdd,
-  onOpenCommand,
-}) => {
+const LEFT: WorkspaceMode[] = ['all', 'study', 'life'];
+const RIGHT: WorkspaceMode[] = ['wealth', 'notes'];
+
+export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMode, onOpenQuickAdd }) => {
+  const item = (mode: WorkspaceMode) => {
+    const { label, Icon } = MODE_META[mode];
+    const active = activeMode === mode;
+    return (
+      <button
+        key={mode}
+        type="button"
+        onClick={() => setActiveMode(mode)}
+        aria-current={active ? 'page' : undefined}
+        className={`relative flex min-h-[58px] flex-col items-center justify-center gap-1 text-[11px] font-bold transition-colors ${
+          active ? 'text-ink' : 'text-ink-3'
+        }`}
+      >
+        {active && <span className="absolute top-0 h-[3px] w-8 rounded-b-full bg-accent" aria-hidden />}
+        <Icon className="h-[21px] w-[21px]" strokeWidth={active ? 2.3 : 1.8} />
+        {label}
+      </button>
+    );
+  };
+
   return (
-    <div className="fixed bottom-3 inset-x-0 z-40 flex justify-center px-4 md:hidden pointer-events-none">
-      <nav className="pointer-events-auto flex items-center gap-1 p-1.5 rounded-2xl glass-dock border border-white/10 shadow-2xl">
-        <button
-          onClick={() => setActiveMode('all')}
-          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
-            activeMode === 'all'
-              ? 'bg-white/15 text-white shadow-sm'
-              : 'text-muted hover:text-white'
-          }`}
-        >
-          <Home className="h-4 w-4 mb-0.5" />
-          <span>Heute</span>
-        </button>
-
-        <button
-          onClick={() => setActiveMode('notes')}
-          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
-            activeMode === 'notes'
-              ? 'bg-indigo-600/30 text-indigo-300 shadow-sm'
-              : 'text-muted hover:text-white'
-          }`}
-        >
-          <FileText className="h-4 w-4 mb-0.5" />
-          <span>Notizen</span>
-        </button>
-
-        {/* Center Prominent Quick-Add Button */}
-        <button
-          onClick={onOpenQuickAdd}
-          className="flex items-center justify-center h-11 w-11 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-600/40 active:scale-90 transition-transform mx-1"
-        >
-          <Plus className="h-5 w-5 stroke-[2.5]" />
-        </button>
-
-        <button
-          onClick={() => setActiveMode('study')}
-          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
-            activeMode === 'study'
-              ? 'bg-indigo-600/30 text-indigo-300 shadow-sm'
-              : 'text-muted hover:text-white'
-          }`}
-        >
-          <GraduationCap className="h-4 w-4 mb-0.5" />
-          <span>Study</span>
-        </button>
-
-        <button
-          onClick={() => setActiveMode('wealth')}
-          className={`flex flex-col items-center justify-center w-12 py-1.5 rounded-xl text-[10px] font-medium transition-all ${
-            activeMode === 'wealth'
-              ? 'bg-emerald-600/30 text-emerald-300 shadow-sm'
-              : 'text-muted hover:text-white'
-          }`}
-        >
-          <Wallet className="h-4 w-4 mb-0.5" />
-          <span>Geld</span>
-        </button>
-      </nav>
-    </div>
+    <nav aria-label="Ansichten" className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-line/10 bg-sheet/90 backdrop-blur-md lg:hidden">
+      <div className="mx-auto grid max-w-lg grid-cols-6 items-center px-1">
+        {LEFT.map(item)}
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={onOpenQuickAdd}
+            aria-label="Neu anlegen"
+            className="-mt-6 flex h-[56px] w-[56px] items-center justify-center rounded-full bg-accent text-on-accent shadow-lift ring-[5px] ring-paper transition-transform active:scale-90"
+          >
+            <Plus className="h-7 w-7" strokeWidth={2.5} />
+          </button>
+        </div>
+        {RIGHT.map(item)}
+      </div>
+    </nav>
   );
 };

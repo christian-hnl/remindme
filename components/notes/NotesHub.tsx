@@ -1,372 +1,294 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Note } from '@/types';
-import { 
-  FileText, 
-  Plus, 
-  Search, 
-  Pin, 
-  Trash2, 
-  Sparkles, 
-  Folder, 
-  Calendar, 
-  Check, 
-  Clock,
-  BookOpen,
-  Lightbulb,
-  Zap
-} from 'lucide-react';
-import { fireMilestoneGlow } from '@/lib/confetti';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { Note } from '@/types';
+import { AlertCircle, Check, ChevronLeft, Loader, Pin, Plus, Search, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { de } from 'date-fns/locale';
 
 interface NotesHubProps {
   notes: Note[];
-  onAddNote: (newNote: Partial<Note>) => Promise<Note | void>;
+  selectedNoteId: string | null;
+  onSelectNote: (id: string | null) => void;
+  onAddNote: (note: Partial<Note>) => Promise<Note | null>;
   onUpdateNote: (id: string, updates: Partial<Note>) => Promise<void>;
-  onDeleteNote: (id: string) => Promise<void>;
+  onDeleteNote: (id: string) => void;
 }
 
-export const NotesHub: React.FC<NotesHubProps> = ({
-  notes,
-  onAddNote,
-  onUpdateNote,
-  onDeleteNote,
-}) => {
-  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(
-    notes.length > 0 ? notes[0].id : null
-  );
+type Draft = { id: string; title: string; content: string };
+type SaveState = 'saved' | 'pending' | 'saving' | 'error';
+
+const AUTOSAVE_DELAY_MS = 700;
+
+const CATEGORIES = [
+  { id: 'all', label: 'Alle' },
+  { id: 'Gedanken', label: 'Gedanken' },
+  { id: 'Uni', label: 'Schule' },
+  { id: 'Ideen', label: 'Ideen' },
+  { id: 'Wichtig', label: 'Wichtig' },
+];
+
+export const NotesHub: React.FC<NotesHubProps> = ({ notes, selectedNoteId, onSelectNote, onAddNote, onUpdateNote, onDeleteNote }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState<string>('all');
-  const [isAutoSaving, setIsAutoSaving] = useState(false);
+  const [activeCategory, setActiveCategory] = useState('all');
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [saveState, setSaveState] = useState<SaveState>('saved');
+  // Phones show either the list or the editor.
+  const [mobileEditor, setMobileEditor] = useState(false);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const focusTitleFor = useRef<string | null>(null);
+  const pending = useRef<Draft | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onUpdateRef = useRef(onUpdateNote);
+  onUpdateRef.current = onUpdateNote;
 
-  // Active note
-  const activeNote = notes.find((n) => n.id === selectedNoteId) || (notes.length > 0 ? notes[0] : null);
+  const activeNote = notes.find((n) => n.id === selectedNoteId) ?? null;
 
-  // If active note was deleted or not selected, pick first available
+  /** Sends the pending draft immediately (used on timer, note switch and unmount). */
+  const flush = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    const toSave = pending.current;
+    if (!toSave) return;
+    pending.current = null;
+    setSaveState('saving');
+    onUpdateRef
+      .current(toSave.id, { title: toSave.title, content: toSave.content })
+      .then(() => setSaveState(pending.current ? 'pending' : 'saved'))
+      .catch(() => setSaveState('error'));
+  }, []);
+
   useEffect(() => {
-    if (!selectedNoteId && notes.length > 0) {
-      setSelectedNoteId(notes[0].id);
+    if (!activeNote && notes.length > 0) onSelectNote(notes[0].id);
+  }, [activeNote, notes, onSelectNote]);
+
+  // Load the draft when switching notes; save whatever was pending for the previous one.
+  useEffect(() => {
+    flush();
+    setDraft(activeNote ? { id: activeNote.id, title: activeNote.title, content: activeNote.content } : null);
+    setSaveState('saved');
+    if (activeNote && focusTitleFor.current === activeNote.id) {
+      focusTitleFor.current = null;
+      requestAnimationFrame(() => titleRef.current?.select());
     }
-  }, [notes, selectedNoteId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeNote?.id]);
 
-  // Categories
-  const categories = [
-    { id: 'all', label: 'Alle Notizen', icon: Folder },
-    { id: 'Gedanken', label: 'Gedanken & Reflexion', icon: Lightbulb },
-    { id: 'Uni', label: 'Uni & Schule', icon: BookOpen },
-    { id: 'Ideen', label: 'Ideen & Projekte', icon: Sparkles },
-    { id: 'Wichtig', label: 'Wichtig & To-Do', icon: Zap },
-  ];
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (pending.current) {
+        flush();
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      flush();
+    };
+  }, [flush]);
 
-  // Filtering
-  const filteredNotes = notes.filter((n) => {
-    const matchesCategory = activeCategory === 'all' || n.category === activeCategory;
-    const matchesSearch = 
-      n.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      n.content.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
+  const editDraft = (field: 'title' | 'content', value: string) => {
+    if (!draft) return;
+    const next = { ...draft, [field]: value };
+    setDraft(next);
+    pending.current = next;
+    setSaveState('pending');
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
+  };
 
-  const pinnedNotes = filteredNotes.filter((n) => n.isPinned);
-  const unpinnedNotes = filteredNotes.filter((n) => !n.isPinned);
-
-  const handleCreateNote = async (presetCategory = 'Gedanken', presetTitle = 'Neue Gedanken') => {
+  const handleCreateNote = async () => {
     const created = await onAddNote({
-      title: presetTitle,
+      title: '',
       content: '',
-      category: presetCategory,
-      isPinned: false,
-      colorHex: '#6366F1',
+      category: activeCategory === 'all' ? 'Gedanken' : activeCategory,
     });
-    if (created && created.id) {
-      setSelectedNoteId(created.id);
+    if (created) {
+      focusTitleFor.current = created.id;
+      onSelectNote(created.id);
+      setMobileEditor(true);
     }
-    fireMilestoneGlow();
   };
 
-  const handleTitleChange = async (val: string) => {
+  const handleDelete = () => {
     if (!activeNote) return;
-    setIsAutoSaving(true);
-    await onUpdateNote(activeNote.id, { title: val });
-    setIsAutoSaving(false);
+    if (window.confirm(`Notiz „${draft?.title || activeNote.title || 'Ohne Titel'}“ löschen?`)) {
+      pending.current = null;
+      setMobileEditor(false);
+      onDeleteNote(activeNote.id);
+    }
   };
 
-  const handleContentChange = async (val: string) => {
-    if (!activeNote) return;
-    setIsAutoSaving(true);
-    await onUpdateNote(activeNote.id, { content: val });
-    setIsAutoSaving(false);
-  };
+  const withDraft = (note: Note) => (draft && draft.id === note.id ? { ...note, title: draft.title, content: draft.content } : note);
 
-  const handleCategoryChange = async (val: string) => {
-    if (!activeNote) return;
-    await onUpdateNote(activeNote.id, { category: val });
-  };
+  const query = searchQuery.trim().toLowerCase();
+  const filtered = notes
+    .map(withDraft)
+    .filter(
+      (n) =>
+        (activeCategory === 'all' || n.category === activeCategory) &&
+        (!query || n.title.toLowerCase().includes(query) || n.content.toLowerCase().includes(query))
+    )
+    .sort((a, b) => Number(b.isPinned) - Number(a.isPinned) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
-  const handleTogglePin = async () => {
-    if (!activeNote) return;
-    await onUpdateNote(activeNote.id, { isPinned: !activeNote.isPinned });
-  };
+  const saveIndicator = {
+    saved: { icon: <Check className="h-3.5 w-3.5" />, text: 'Gespeichert', className: 'text-ink-3' },
+    pending: { icon: <Loader className="h-3.5 w-3.5" />, text: 'Ungespeichert', className: 'text-ink-3' },
+    saving: { icon: <Loader className="h-3.5 w-3.5 animate-spin" />, text: 'Speichert…', className: 'text-ink-2' },
+    error: { icon: <AlertCircle className="h-3.5 w-3.5" />, text: 'Nicht gespeichert', className: 'text-pen' },
+  }[saveState];
 
   return (
-    <div className="rounded-3xl bg-[#11141D] border border-white/[0.06] shadow-bento overflow-hidden animate-in fade-in">
-      {/* Top Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06] bg-[#141824] flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            <FileText className="h-5 w-5" />
+    <div className="card grid min-h-[70vh] overflow-hidden md:grid-cols-[320px_1fr] lg:grid-cols-[360px_1fr]">
+      {/* List */}
+      <div className={`${mobileEditor ? 'hidden md:flex' : 'flex'} min-w-0 flex-col border-line/10 md:border-r`}>
+        <div className="space-y-3 border-b border-line/10 p-4">
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3" />
+              <label htmlFor="notes-search" className="sr-only">
+                Notizen durchsuchen
+              </label>
+              <input
+                id="notes-search"
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Suchen…"
+                className="field-input h-10 py-0 pl-9"
+              />
+            </div>
+            <button type="button" onClick={handleCreateNote} className="btn-primary h-10 px-3" aria-label="Neue Notiz">
+              <Plus className="h-5 w-5" strokeWidth={2.5} />
+              <span className="hidden sm:inline">Neu</span>
+            </button>
           </div>
-          <div>
-            <h2 className="text-base font-semibold text-white tracking-tight flex items-center gap-2">
-              Gedanken & Notizen
-              <span className="px-2 py-0.5 rounded-full text-xs font-mono font-medium bg-indigo-500/15 text-indigo-300 border border-indigo-500/25">
-                {notes.length} Notizen
-              </span>
-            </h2>
-            <p className="text-xs text-muted">
-              Apple Notes & Notion Workflow • Spontane Einfälle, Mitschriften & Ideen
-            </p>
+          <div className="scrollbar-none -mx-1 flex gap-1 overflow-x-auto px-1" role="tablist" aria-label="Kategorie">
+            {CATEGORIES.map(({ id, label }) => (
+              <button key={id} type="button" role="tab" aria-selected={activeCategory === id} onClick={() => setActiveCategory(id)} className="tab h-8 px-3 text-[13px]">
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleCreateNote('Gedanken', '💡 Neuer Gedanke')}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 active:scale-95 transition-all"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Notiz verfassen</span>
-          </button>
-        </div>
+        <ul className="flex-1 divide-y divide-line/10 overflow-y-auto md:max-h-[calc(70vh-120px)]">
+          {filtered.length === 0 && <li className="p-8 text-center text-[14px] text-ink-3">Keine Notizen gefunden.</li>}
+          {filtered.map((note) => {
+            const isSelected = note.id === selectedNoteId;
+            return (
+              <li key={note.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectNote(note.id);
+                    setMobileEditor(true);
+                  }}
+                  aria-current={isSelected ? 'true' : undefined}
+                  className={`relative block w-full px-4 py-3 text-left transition-colors ${isSelected ? 'md:bg-inset' : 'hover:bg-inset/60'}`}
+                >
+                  {isSelected && <span className="absolute inset-y-2 left-0 hidden w-[3px] rounded-r bg-accent md:block" aria-hidden />}
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[15px] font-bold text-ink">{note.title || 'Ohne Titel'}</span>
+                    {note.isPinned && <Pin className="h-3.5 w-3.5 flex-shrink-0 text-ink-3" />}
+                  </span>
+                  <span className="mt-0.5 line-clamp-2 block text-[13px] leading-relaxed text-ink-2">{note.content || 'Noch leer'}</span>
+                  <span className="mt-1.5 flex items-center justify-between font-mono text-[11px] text-ink-3">
+                    <span>{CATEGORIES.find((c) => c.id === note.category)?.label ?? note.category}</span>
+                    <span>{format(new Date(note.updatedAt), 'd. MMM', { locale: de })}</span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       </div>
 
-      {/* Main Two-Column Layout */}
-      <div className="grid grid-cols-1 md:grid-cols-12 min-h-[580px]">
-        
-        {/* LEFT COLUMN: Sidebar & Notes List (4 Cols) */}
-        <div className="md:col-span-4 border-r border-white/[0.06] p-4 flex flex-col bg-[#0D1017]/50">
-          
-          {/* Search bar */}
-          <div className="relative mb-3">
-            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Notizen durchsuchen..."
-              className="w-full pl-8.5 pr-3 py-2 rounded-xl bg-[#161B26] border border-white/10 text-xs text-white placeholder-muted focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          {/* Category Filter Pills */}
-          <div className="flex items-center gap-1 overflow-x-auto pb-2 mb-3 scrollbar-none">
-            {categories.map((c) => {
-              const Icon = c.icon;
-              const isSelected = activeCategory === c.id;
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => setActiveCategory(c.id)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium transition-all whitespace-nowrap ${
-                    isSelected
-                      ? 'bg-indigo-600/25 text-indigo-300 border border-indigo-500/40 shadow-sm'
-                      : 'bg-[#161B26] text-muted hover:text-white border border-white/5'
-                  }`}
-                >
-                  <Icon className="h-3 w-3" />
-                  <span>{c.label}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Notes List */}
-          <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[480px]">
-            {filteredNotes.length === 0 ? (
-              <div className="py-12 text-center text-xs text-muted">
-                Keine Notizen gefunden.
-              </div>
-            ) : (
-              <>
-                {/* Pinned notes */}
-                {pinnedNotes.length > 0 && (
-                  <div className="space-y-1.5 mb-2">
-                    <div className="text-[10px] font-semibold text-indigo-300 uppercase tracking-wider px-1 flex items-center gap-1">
-                      <Pin className="h-2.5 w-2.5" />
-                      <span>Angepinnt</span>
-                    </div>
-                    {pinnedNotes.map((note) => {
-                      const isSelected = activeNote?.id === note.id;
-                      return (
-                        <button
-                          key={note.id}
-                          onClick={() => setSelectedNoteId(note.id)}
-                          className={`w-full text-left p-3 rounded-2xl border transition-all ${
-                            isSelected
-                              ? 'bg-indigo-950/40 border-indigo-500/40 shadow-sm'
-                              : 'bg-[#161B26] border-white/5 hover:border-white/10'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-1 mb-1">
-                            <span className="font-semibold text-xs text-white truncate">
-                              {note.title || 'Ohne Titel'}
-                            </span>
-                            <Pin className="h-3 w-3 text-indigo-400 flex-shrink-0" />
-                          </div>
-                          <p className="text-[11px] text-muted line-clamp-2 leading-relaxed">
-                            {note.content || 'Keine Notiz vorhanden...'}
-                          </p>
-                          <div className="flex items-center justify-between text-[10px] text-muted mt-2">
-                            <span className="px-1.5 py-0.2 rounded bg-white/5 font-medium">
-                              {note.category}
-                            </span>
-                            <span className="font-mono">
-                              {format(new Date(note.updatedAt), 'dd. MMM', { locale: de })}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Regular notes */}
-                <div className="space-y-1.5">
-                  {pinnedNotes.length > 0 && unpinnedNotes.length > 0 && (
-                    <div className="text-[10px] font-semibold text-muted uppercase tracking-wider px-1 mt-3">
-                      Weitere Notizen
-                    </div>
-                  )}
-                  {unpinnedNotes.map((note) => {
-                    const isSelected = activeNote?.id === note.id;
-                    return (
-                      <button
-                        key={note.id}
-                        onClick={() => setSelectedNoteId(note.id)}
-                        className={`w-full text-left p-3 rounded-2xl border transition-all ${
-                          isSelected
-                            ? 'bg-indigo-950/40 border-indigo-500/40 shadow-sm'
-                            : 'bg-[#161B26] border-white/5 hover:border-white/10'
-                        }`}
-                      >
-                        <div className="font-semibold text-xs text-white truncate mb-1">
-                          {note.title || 'Ohne Titel'}
-                        </div>
-                        <p className="text-[11px] text-muted line-clamp-2 leading-relaxed">
-                          {note.content || 'Keine Notiz vorhanden...'}
-                        </p>
-                        <div className="flex items-center justify-between text-[10px] text-muted mt-2">
-                          <span className="px-1.5 py-0.2 rounded bg-white/5 font-medium">
-                            {note.category}
-                          </span>
-                          <span className="font-mono">
-                            {format(new Date(note.updatedAt), 'dd. MMM', { locale: de })}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* RIGHT COLUMN: Active Note Editor (8 Cols) */}
-        <div className="md:col-span-8 p-6 flex flex-col bg-[#11141D]">
-          {activeNote ? (
-            <div className="flex-1 flex flex-col space-y-4">
-              {/* Note Header & Metadata Bar */}
-              <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-white/[0.06]">
-                <div className="flex items-center gap-2">
-                  <select
-                    value={activeNote.category}
-                    onChange={(e) => handleCategoryChange(e.target.value)}
-                    className="px-2.5 py-1 rounded-xl bg-[#161B26] border border-white/10 text-xs text-indigo-300 font-medium focus:outline-none"
-                  >
-                    <option value="Gedanken">💡 Gedanken & Reflexion</option>
-                    <option value="Uni">📚 Uni & Vorlesung</option>
-                    <option value="Ideen">🎯 Ideen & Projekte</option>
-                    <option value="Wichtig">⚡ Wichtig & To-Do</option>
-                  </select>
-
-                  <span className="text-[11px] text-muted font-mono hidden sm:inline">
-                    Zuletzt gespeichert: {format(new Date(activeNote.updatedAt), 'HH:mm', { locale: de })}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleTogglePin}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs border transition-colors ${
-                      activeNote.isPinned
-                        ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/30'
-                        : 'bg-[#161B26] text-muted hover:text-white border-white/5'
-                    }`}
-                    title={activeNote.isPinned ? 'Pin entfernen' : 'Oben anpinnen'}
-                  >
-                    <Pin className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{activeNote.isPinned ? 'Angepinnt' : 'Anpinnen'}</span>
-                  </button>
-
-                  <button
-                    onClick={() => onDeleteNote(activeNote.id)}
-                    className="p-1.5 rounded-xl text-muted hover:text-rose-400 bg-[#161B26] hover:bg-rose-500/10 border border-white/5 transition-colors"
-                    title="Notiz löschen"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Editable Title */}
-              <input
-                type="text"
-                value={activeNote.title}
-                onChange={(e) => handleTitleChange(e.target.value)}
-                placeholder="Titel der Notiz..."
-                className="w-full bg-transparent text-xl sm:text-2xl font-bold text-white tracking-tight placeholder-muted/50 focus:outline-none border-b border-transparent focus:border-indigo-500/30 pb-1"
-              />
-
-              {/* Editable Content */}
-              <textarea
-                value={activeNote.content}
-                onChange={(e) => handleContentChange(e.target.value)}
-                placeholder="Schreibe hier deine Gedanken, Mitschriften, Ideen oder To-Dos auf..."
-                className="flex-1 w-full bg-transparent text-sm text-white/90 placeholder-muted/40 focus:outline-none resize-none leading-relaxed min-h-[350px]"
-              />
-
-              {/* Footer info */}
-              <div className="flex items-center justify-between text-[11px] text-muted pt-3 border-t border-white/[0.06]">
-                <div className="flex items-center gap-3">
-                  <span>{activeNote.content.split(/\s+/).filter(Boolean).length} Wörter</span>
-                  <span>{activeNote.content.length} Zeichen</span>
-                </div>
-                <div className="flex items-center gap-1 text-emerald-400">
-                  <Check className="h-3 w-3" />
-                  <span>Automatisch synchronisiert</span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center text-muted">
-              <FileText className="h-12 w-12 text-muted-dark mb-3" />
-              <h3 className="text-sm font-medium text-white mb-1">Keine Notiz ausgewählt</h3>
-              <p className="text-xs max-w-xs mb-4">
-                Erstelle eine neue Notiz oder wähle eine bestehende aus der linken Liste.
-              </p>
-              <button
-                onClick={() => handleCreateNote()}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow"
-              >
-                + Neue Notiz anlegen
+      {/* Editor */}
+      <div className={`${mobileEditor ? 'flex' : 'hidden md:flex'} min-w-0 flex-col`}>
+        {activeNote && draft ? (
+          <>
+            <div className="flex items-center gap-1 border-b border-line/10 px-2 py-2 sm:px-4">
+              <button type="button" onClick={() => setMobileEditor(false)} className="icon-btn md:hidden" aria-label="Zurück zur Liste">
+                <ChevronLeft className="h-5 w-5" />
               </button>
+              <label htmlFor="note-category" className="sr-only">
+                Kategorie
+              </label>
+              <select
+                id="note-category"
+                value={activeNote.category}
+                onChange={(e) => onUpdateNote(activeNote.id, { category: e.target.value }).catch(() => {})}
+                className="h-9 rounded-[9px] border border-line/15 bg-inset px-2 text-[13px] font-bold text-ink focus:outline-none"
+              >
+                <option value="Gedanken">Gedanken</option>
+                <option value="Uni">Schule</option>
+                <option value="Ideen">Ideen</option>
+                <option value="Wichtig">Wichtig</option>
+              </select>
+              <span className={`ml-2 hidden items-center gap-1 text-[12px] sm:inline-flex ${saveIndicator.className}`} role="status">
+                {saveIndicator.icon}
+                {saveIndicator.text}
+              </span>
+              <div className="ml-auto flex items-center">
+                <button
+                  type="button"
+                  onClick={() => onUpdateNote(activeNote.id, { isPinned: !activeNote.isPinned }).catch(() => {})}
+                  aria-pressed={activeNote.isPinned}
+                  className={`icon-btn ${activeNote.isPinned ? 'text-accent' : ''}`}
+                  aria-label={activeNote.isPinned ? 'Nicht mehr anheften' : 'Oben anheften'}
+                  title={activeNote.isPinned ? 'Nicht mehr anheften' : 'Oben anheften'}
+                >
+                  <Pin className="h-[18px] w-[18px]" fill={activeNote.isPinned ? 'currentColor' : 'none'} />
+                </button>
+                <button type="button" onClick={handleDelete} className="icon-btn hover:text-pen" aria-label="Notiz löschen" title="Löschen">
+                  <Trash2 className="h-[18px] w-[18px]" />
+                </button>
+              </div>
             </div>
-          )}
-        </div>
+
+            <div className="flex flex-1 flex-col px-4 py-4 sm:px-8 sm:py-6">
+              <label htmlFor="note-title" className="sr-only">
+                Titel
+              </label>
+              <input
+                id="note-title"
+                ref={titleRef}
+                type="text"
+                value={draft.title}
+                onChange={(e) => editDraft('title', e.target.value)}
+                placeholder="Titel"
+                maxLength={200}
+                className="w-full bg-transparent font-display text-[32px] font-bold leading-tight text-ink placeholder:text-ink-3/60 focus:outline-none sm:text-[40px]"
+              />
+              <p className="mb-3 mt-1 font-mono text-[12px] text-ink-3">
+                {format(new Date(activeNote.updatedAt), "d. MMMM yyyy, HH:mm", { locale: de })} ·{' '}
+                {draft.content.split(/\s+/).filter(Boolean).length} Wörter
+                <span className={`ml-2 sm:hidden ${saveIndicator.className}`}>· {saveIndicator.text}</span>
+              </p>
+              <label htmlFor="note-content" className="sr-only">
+                Inhalt
+              </label>
+              <textarea
+                id="note-content"
+                value={draft.content}
+                onChange={(e) => editDraft('content', e.target.value)}
+                onBlur={flush}
+                placeholder="Einfach losschreiben…"
+                className="ruled min-h-[50vh] w-full flex-1 resize-none bg-transparent text-[16px] text-ink placeholder:text-ink-3/60 focus:outline-none"
+              />
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-1 flex-col items-center justify-center p-10 text-center">
+            <p className="font-display text-[26px] font-semibold text-ink">Noch keine Notiz</p>
+            <p className="mb-4 mt-1 text-[14px] text-ink-2">Halte Gedanken, Mitschriften und Ideen fest.</p>
+            <button type="button" onClick={handleCreateNote} className="btn-primary">
+              <Plus className="h-4 w-4" /> Erste Notiz
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

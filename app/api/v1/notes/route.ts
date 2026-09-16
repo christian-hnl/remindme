@@ -1,49 +1,41 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
+import { cleanString, readJson, serverError } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const user = await db.user.findFirst();
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
-
+    const user = await getCurrentUser();
     const notes = await db.note.findMany({
       where: { userId: user.id },
-      orderBy: [
-        { isPinned: 'desc' },
-        { updatedAt: 'desc' },
-      ],
+      orderBy: [{ isPinned: 'desc' }, { updatedAt: 'desc' }],
     });
-
     return NextResponse.json(notes);
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch notes' }, { status: 500 });
+    return serverError('GET /notes', error);
   }
 }
 
 export async function POST(req: Request) {
   try {
-    const user = await db.user.findFirst();
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
-
-    const body = await req.json();
-    const { title, content, category, isPinned, colorHex } = body;
+    const user = await getCurrentUser();
+    const body = await readJson(req);
 
     const note = await db.note.create({
       data: {
         userId: user.id,
-        title: (title || 'Neue Notiz').trim(),
-        content: content || '',
-        category: category || 'Gedanken',
-        isPinned: !!isPinned,
-        colorHex: colorHex || '#6366F1',
+        title: cleanString(body.title, 200) || 'Neue Notiz',
+        content: typeof body.content === 'string' ? body.content.slice(0, 100_000) : '',
+        category: cleanString(body.category, 40) || 'Gedanken',
+        isPinned: !!body.isPinned,
+        colorHex: cleanString(body.colorHex, 9) || '#6366F1',
       },
     });
 
     return NextResponse.json(note, { status: 201 });
   } catch (error) {
-    console.error('Error creating note:', error);
-    return NextResponse.json({ error: 'Failed to create note' }, { status: 500 });
+    return serverError('POST /notes', error, 'Notiz konnte nicht erstellt werden');
   }
 }

@@ -8,38 +8,100 @@ datasource db {
 }
 
 model User {
-  id           String          @id @default(uuid())
-  email        String          @unique
-  displayName  String
-  monthlyBudget Float          @default(580.0)
-  preferences  String          @default("{\"theme\": \"dark\", \"currency\": \"EUR\", \"active_mode\": \"all\"}")
-  createdAt    DateTime        @default(now())
-  subjects     Subject[]
-  tasks        Task[]
-  savingsPots  SavingsPot[]
-  transactions Transaction[]
-  widgets      UserWidget[]
-  schedule     ScheduleBlock[]
-  reminders    Reminder[]
-  notes        Note[]
-  untisConfig  WebUntisConfig?
+  id              String           @id @default(uuid())
+  email           String           @unique
+  displayName     String
+  monthlyBudget   Float            @default(580.0)
+  startingBalance Float            @default(2840.5)
+  preferences     String           @default("{\"theme\": \"dark\", \"currency\": \"EUR\", \"active_mode\": \"all\"}")
+  createdAt       DateTime         @default(now())
+  subjects        Subject[]
+  tasks           Task[]
+  savingsPots     SavingsPot[]
+  transactions    Transaction[]
+  widgets         UserWidget[]
+  schedule        ScheduleBlock[]
+  reminders       Reminder[]
+  notes           Note[]
+  untisConfig     WebUntisConfig?
+  bankingConfig   BankingConfig?
+  bankConnections BankConnection[]
+  bankAccounts    BankAccount[]
+  exams           Exam[]
+  grades          Grade[]
+  shoppingItems   ShoppingItem[]
+  habits          Habit[]
+  birthdays       Birthday[]
 }
 
 model WebUntisConfig {
-  id          String    @id @default(uuid())
-  userId      String    @unique
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  school      String    @default("gym-st-michael")
-  schoolName  String    @default("Gymnasium St. Michael")
-  server      String    @default("arche.webuntis.com")
-  username    String    @default("alexander.student")
-  password    String?
-  icalUrl     String?
-  isConnected Boolean   @default(true)
-  lastSyncAt  DateTime?
-  autoSync    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school         String    @default("gym-st-michael")
+  schoolName     String    @default("Gymnasium St. Michael")
+  server         String    @default("arche.webuntis.com")
+  username       String    @default("alexander.student")
+  password       String?
+  icalUrl        String?
+  isConnected    Boolean   @default(true)
+  lastSyncAt     DateTime?
+  autoSync       Boolean   @default(true)
+  /// personal = the student's own timetable, class = the whole class incl. parallel groups
+  timetableScope String    @default("personal")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+/// Enable Banking API application credentials (PSD2 account information).
+model BankingConfig {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appId       String?
+  privateKey  String?
+  redirectUrl String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// One bank authorisation (session) at Enable Banking, valid until the consent expires.
+model BankConnection {
+  id           String        @id @default(uuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  aspspName    String
+  aspspCountry String
+  authState    String?       @unique
+  sessionId    String?
+  validUntil   DateTime?
+  status       String        @default("pending") // pending | active | expired | error
+  lastSyncAt   DateTime?
+  lastError    String?
+  createdAt    DateTime      @default(now())
+  accounts     BankAccount[]
+}
+
+/// A bank or broker account – synced live or filled by file imports.
+model BankAccount {
+  id                String          @id @default(uuid())
+  userId            String
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectionId      String?
+  connection        BankConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  source            String // enablebanking | george | traderepublic | finanzguru | file
+  externalKey       String
+  providerAccountId String?
+  name              String
+  iban              String?
+  currency          String          @default("EUR")
+  balance           Float?
+  balanceUpdatedAt  DateTime?
+  includeInBalance  Boolean         @default(true)
+  lastImportAt      DateTime?
+  createdAt         DateTime        @default(now())
+  transactions      Transaction[]
+
+  @@unique([userId, externalKey])
 }
 
 model Subject {
@@ -53,6 +115,8 @@ model Subject {
   createdAt DateTime        @default(now())
   tasks     Task[]
   lessons   ScheduleBlock[]
+  exams     Exam[]
+  grades    Grade[]
 }
 
 model Task {
@@ -73,6 +137,80 @@ model Task {
   customMetadata   String?        @default("{}")
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
+}
+
+/// Schularbeiten, Tests, Referate … with a countdown.
+model Exam {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  title     String
+  kind      String   @default("test") // schularbeit | test | pruefung | referat | sonstiges
+  date      DateTime
+  topics    String?
+  isDone    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+/// Austrian grades 1 (Sehr gut) – 5 (Nicht genügend), weighted per kind.
+model Grade {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  value     Float
+  kind      String   @default("test") // schularbeit | test | mitarbeit | sonstiges
+  weight    Float    @default(1)
+  title     String?
+  date      DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+model ShoppingItem {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  quantity  String?
+  isDone    Boolean   @default(false)
+  doneAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model Habit {
+  id        String     @id @default(uuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  emoji     String     @default("✅")
+  archived  Boolean    @default(false)
+  createdAt DateTime   @default(now())
+  logs      HabitLog[]
+}
+
+model HabitLog {
+  id      String @id @default(uuid())
+  habitId String
+  habit   Habit  @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  /// Local calendar day, yyyy-MM-dd
+  day     String
+
+  @@unique([habitId, day])
+}
+
+model Birthday {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  month     Int
+  day       Int
+  year      Int?
+  note      String?
+  createdAt DateTime @default(now())
 }
 
 model ScheduleBlock {
@@ -105,7 +243,7 @@ model Reminder {
   hasDueDate    Boolean   @default(true)
   dueDate       DateTime?
   dueTime       String?
-  personName    String?   // z. B. "Mama", "Hr. Weber", "Chris"
+  personName    String? // z. B. "Mama", "Hr. Weber", "Chris"
   reminderType  String    @default("todo") // "say_to_person", "action", "errand"
   isDone        Boolean   @default(false)
   icon          String    @default("bell")
@@ -144,18 +282,28 @@ model SavingsPot {
 }
 
 model Transaction {
-  id              String      @id @default(uuid())
+  id              String       @id @default(uuid())
   userId          String?
-  user            User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
   savingsPotId    String?
-  savingsPot      SavingsPot? @relation(fields: [savingsPotId], references: [id], onDelete: SetNull)
+  savingsPot      SavingsPot?  @relation(fields: [savingsPotId], references: [id], onDelete: SetNull)
+  bankAccountId   String?
+  bankAccount     BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
   title           String
   amount          Float
   category        String
   type            String
-  isRecurring     Boolean     @default(false)
-  transactionDate DateTime    @default(now())
-  createdAt       DateTime    @default(now())
+  isRecurring     Boolean      @default(false)
+  /// manual | enablebanking | george | traderepublic | finanzguru | file
+  source          String       @default("manual")
+  externalId      String?
+  counterparty    String?
+  description     String?
+  transactionDate DateTime     @default(now())
+  createdAt       DateTime     @default(now())
+
+  @@unique([userId, externalId])
+  @@index([userId, transactionDate])
 }
 
 model UserWidget {

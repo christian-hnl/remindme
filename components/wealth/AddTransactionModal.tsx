@@ -1,191 +1,159 @@
 'use client';
 
-import React, { useState } from 'react';
-import { X, CreditCard, ArrowDownRight, ArrowUpRight } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { CreditCard } from 'lucide-react';
+import type { Transaction } from '@/types';
+import { Modal } from '@/components/ui/Modal';
+import { useToast } from '@/components/ui/Toast';
+import { api, errorMessage } from '@/lib/client';
+import { fromDateInput, parseAmount, toDateInput } from '@/lib/format';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onTransactionCreated: (tx: any) => void;
+  onTransactionCreated: (tx: Transaction) => void;
 }
 
-export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
-  isOpen,
-  onClose,
-  onTransactionCreated,
-}) => {
+const CATEGORIES = {
+  expense: ['Essen', 'Freizeit', 'Transport', 'Schule', 'Kleidung', 'Fixkosten', 'Gesundheit', 'Sonstiges'],
+  income: ['Taschengeld', 'Nebenjob', 'Einkommen', 'Geschenk', 'Verkauf', 'Sonstiges'],
+};
+
+export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ isOpen, onClose, onTransactionCreated }) => {
+  const toast = useToast();
+  const [type, setType] = useState<'expense' | 'income'>('expense');
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
-  const [category, setCategory] = useState('Lebensmittel');
-  const [type, setType] = useState<'expense' | 'income'>('expense');
+  const [category, setCategory] = useState(CATEGORIES.expense[0]);
+  const [date, setDate] = useState('');
   const [isRecurring, setIsRecurring] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) return;
+    setType('expense');
+    setTitle('');
+    setAmount('');
+    setCategory(CATEGORIES.expense[0]);
+    setDate(toDateInput(new Date()));
+    setIsRecurring(false);
+  }, [isOpen]);
+
+  const switchType = (next: 'expense' | 'income') => {
+    setType(next);
+    setCategory(CATEGORIES[next][0]);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !amount) return;
+    const value = parseAmount(amount);
+    if (!title.trim()) return;
+    if (!(value > 0)) return toast('Bitte einen Betrag über 0 eingeben', 'error');
+
+    // Today keeps the current time (so it sorts correctly), other days use noon.
+    const chosen = fromDateInput(date);
+    const transactionDate = date === toDateInput(new Date()) ? new Date() : new Date(chosen.setHours(12));
 
     setLoading(true);
     try {
-      const res = await fetch('/api/v1/transactions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: title.trim(),
-          amount: parseFloat(amount),
-          category,
-          type,
-          isRecurring,
-        }),
+      const tx = await api<Transaction>('/api/v1/transactions', {
+        body: { title: title.trim(), amount: value, category, type, isRecurring, transactionDate: transactionDate.toISOString() },
       });
-
-      if (res.ok) {
-        const tx = await res.json();
-        onTransactionCreated(tx);
-        setTitle('');
-        setAmount('');
-        onClose();
-      } else {
-        alert('Fehler beim Erfassen der Transaktion');
-      }
-    } catch (err) {
-      console.error(err);
+      onTransactionCreated(tx);
+      onClose();
+    } catch (error) {
+      toast(`Buchung konnte nicht gespeichert werden: ${errorMessage(error)}`, 'error');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in">
-      <div 
-        className="w-full max-w-md rounded-3xl bg-[#11141D] border border-white/10 shadow-2xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06] bg-[#141824]">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
-              <CreditCard className="h-4 w-4" />
-            </div>
-            <h3 className="text-sm font-semibold text-white">Transaktion erfassen</h3>
-          </div>
-          <button onClick={onClose} className="text-muted hover:text-white p-1 rounded-lg">
-            <X className="h-4 w-4" />
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      size="sm"
+      title="Neue Buchung"
+      icon={<CreditCard className="h-[18px] w-[18px]" />}
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="btn-ghost">
+            Abbrechen
+          </button>
+          <button type="submit" form="tx-form" disabled={loading || !title.trim() || !amount} className="btn-primary">
+            {loading ? 'Speichert…' : 'Speichern'}
+          </button>
+        </>
+      }
+    >
+      <form id="tx-form" onSubmit={handleSubmit} className="space-y-5">
+        <div className="segmented grid-cols-2" role="group" aria-label="Art">
+          <button type="button" aria-pressed={type === 'expense'} onClick={() => switchType('expense')} className="segmented-item">
+            Ausgabe
+          </button>
+          <button type="button" aria-pressed={type === 'income'} onClick={() => switchType('income')} className="segmented-item">
+            Einnahme
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {/* Type Toggle: Ausgabe vs Einnahme */}
-          <div className="grid grid-cols-2 gap-2 bg-[#161B26] p-1 rounded-2xl border border-white/5">
-            <button
-              type="button"
-              onClick={() => setType('expense')}
-              className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                type === 'expense'
-                  ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                  : 'text-muted hover:text-white'
-              }`}
-            >
-              <ArrowDownRight className="h-3.5 w-3.5" />
-              <span>Ausgabe</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setType('income')}
-              className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                type === 'income'
-                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
-                  : 'text-muted hover:text-white'
-              }`}
-            >
-              <ArrowUpRight className="h-3.5 w-3.5" />
-              <span>Einnahme</span>
-            </button>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-muted uppercase tracking-wider mb-1.5">
-              Beschreibung / Zweck *
-            </label>
+        <div>
+          <label htmlFor="tx-amount" className="field-label">
+            Betrag
+          </label>
+          <div className="relative">
             <input
+              id="tx-amount"
               autoFocus
-              type="text"
+              inputMode="decimal"
               required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="z. B. Bäcker, Supermarkt REWE, Gehalt..."
-              className="w-full rounded-xl bg-[#161B26] border border-white/10 px-3.5 py-2.5 text-sm text-white placeholder-muted focus:outline-none focus:border-indigo-500"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0,00"
+              className={`field-input h-14 pr-10 font-mono text-[26px] ${type === 'income' ? 'text-leaf' : ''}`}
             />
+            <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[20px] text-ink-3">€</span>
           </div>
+        </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-muted uppercase tracking-wider mb-1.5">
-                Betrag (€) *
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                required
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="12.50"
-                className="w-full rounded-xl bg-[#161B26] border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
-              />
-            </div>
+        <div>
+          <label htmlFor="tx-title" className="field-label">
+            Wofür?
+          </label>
+          <input
+            id="tx-title"
+            required
+            maxLength={120}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={type === 'expense' ? 'z. B. Mensa, Kino, Busticket' : 'z. B. Taschengeld'}
+            className="field-input"
+          />
+        </div>
 
-            <div>
-              <label className="block text-xs font-medium text-muted uppercase tracking-wider mb-1.5">
-                Kategorie
-              </label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full rounded-xl bg-[#161B26] border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-              >
-                <option value="Lebensmittel">Lebensmittel</option>
-                <option value="Fixkosten">Fixkosten / Verträge</option>
-                <option value="Transport">Transport / Bahn</option>
-                <option value="Freizeit">Freizeit & Ausgehen</option>
-                <option value="Bildung">Bildung & Uni</option>
-                <option value="Einkommen">Einkommen</option>
-                <option value="Sonstiges">Sonstiges</option>
-              </select>
-            </div>
+        <div>
+          <span className="field-label">Kategorie</span>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Kategorie">
+            {CATEGORIES[type].map((c) => (
+              <button key={c} type="button" aria-pressed={category === c} onClick={() => setCategory(c)} className="tab border-line/15">
+                {c}
+              </button>
+            ))}
           </div>
+          {type === 'expense' && category !== 'Fixkosten' && <p className="mt-2 text-[12px] text-ink-3">Zählt zu deinem Tagesbudget.</p>}
+        </div>
 
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="checkbox"
-              id="isRecurring"
-              checked={isRecurring}
-              onChange={(e) => setIsRecurring(e.target.checked)}
-              className="rounded bg-[#161B26] border-white/20 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
-            />
-            <label htmlFor="isRecurring" className="text-xs text-muted cursor-pointer">
-              Wiederkehrende Ausgabe (Abo / Dauerauftrag)
+        <div className="grid grid-cols-2 items-end gap-3">
+          <div>
+            <label htmlFor="tx-date" className="field-label">
+              Datum
             </label>
+            <input id="tx-date" type="date" required value={date} onChange={(e) => setDate(e.target.value)} className="field-input font-mono text-[14px]" />
           </div>
-
-          <div className="pt-3 border-t border-white/[0.06] flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-muted hover:text-white"
-            >
-              Abbrechen
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !title.trim() || !amount}
-              className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 active:scale-95 transition-all"
-            >
-              {loading ? 'Buche...' : 'Transaktion speichern'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+          <button type="button" aria-pressed={isRecurring} onClick={() => setIsRecurring((v) => !v)} className="tab h-[46px] justify-center border-line/15">
+            {isRecurring ? 'Jeden Monat' : 'Einmalig'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 };

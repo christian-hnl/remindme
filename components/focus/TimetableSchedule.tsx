@@ -1,888 +1,509 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { ScheduleBlock, Task, Subject } from '@/types';
-import { 
-  Clock, 
-  MapPin, 
-  User, 
-  CheckCircle2, 
-  Circle, 
-  AlertTriangle, 
-  Calendar, 
-  School, 
-  RefreshCw, 
-  Maximize2, 
-  Minimize2,
-  Filter, 
-  Plus, 
-  BookOpen,
-  Sparkles,
-  ChevronRight,
-  Info,
-  X
-} from 'lucide-react';
-import { fireMilestoneGlow } from '@/lib/confetti';
+import React, { useEffect, useMemo, useState } from 'react';
+import { formatDistanceToNow } from 'date-fns';
+import { de } from 'date-fns/locale';
+import type { ScheduleBlock, Task, WebUntisConfig } from '@/types';
+import { AlertTriangle, Maximize2, Minimize2, Plus, RefreshCw, School } from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
+import { CheckButton } from '@/components/ui/CheckButton';
+import { minutesToTime, timeToMinutes } from '@/lib/format';
+import { groupOverlapping } from '@/lib/lanes';
+import { DEMO_SCHOOL } from '@/lib/untis-defaults';
 
 interface TimetableScheduleProps {
   schedule: ScheduleBlock[];
-  subjects?: Subject[];
+  untisConfig: WebUntisConfig | null;
   onToggleTaskStatus: (task: Task) => void;
   onOpenUntisModal: () => void;
-  onOpenCreateTask?: (subjectId?: string) => void;
+  onCreateTask: (subjectId?: string | null) => void;
+  onEditTask: (task: Task) => void;
 }
 
-// Standard periods definition
-const STANDARD_PERIODS = [
-  { id: 1, label: '1. Stunde', timeRange: '08:00 – 09:30', startMin: 8 * 60, endMin: 9 * 60 + 30 },
-  { id: 2, label: '2. Stunde', timeRange: '09:45 – 11:15', startMin: 9 * 60 + 45, endMin: 11 * 60 + 15 },
-  { id: 3, label: '3. Stunde', timeRange: '11:45 – 13:15', startMin: 11 * 60 + 45, endMin: 13 * 60 + 15 },
-  { id: 4, label: '4. Stunde', timeRange: '13:30 – 15:00', startMin: 13 * 60 + 30, endMin: 15 * 60 },
-  { id: 5, label: '5. Stunde', timeRange: '15:15 – 16:45', startMin: 15 * 60 + 15, endMin: 16 * 60 + 45 },
-  { id: 6, label: '6. Stunde', timeRange: '17:00 – 18:30', startMin: 17 * 60, endMin: 18 * 60 + 30 },
+const DAYS = [
+  { num: 1, name: 'Montag', short: 'Mo' },
+  { num: 2, name: 'Dienstag', short: 'Di' },
+  { num: 3, name: 'Mittwoch', short: 'Mi' },
+  { num: 4, name: 'Donnerstag', short: 'Do' },
+  { num: 5, name: 'Freitag', short: 'Fr' },
 ];
 
-const DAYS = [
-  { num: 1, name: 'Montag', short: 'Mo', fullDateLabel: 'Mo' },
-  { num: 2, name: 'Dienstag', short: 'Di', fullDateLabel: 'Di' },
-  { num: 3, name: 'Mittwoch', short: 'Mi', fullDateLabel: 'Mi' },
-  { num: 4, name: 'Donnerstag', short: 'Do', fullDateLabel: 'Do' },
-  { num: 5, name: 'Freitag', short: 'Fr', fullDateLabel: 'Fr' },
-];
+interface Period {
+  id: number;
+  startMin: number;
+  lastStartMin: number;
+  endMin: number;
+}
+
+const blockCode = (b: ScheduleBlock) => (b.subjectCode || b.title.slice(0, 3)).toUpperCase();
+const blockName = (b: ScheduleBlock) => b.subject?.name ?? b.title.split('(')[0].trim();
+
+/** Up to three parallel lessons side by side; more wrap into further rows. */
+const parallelGrid = (count: number) => (count >= 3 ? 'grid-cols-3' : count === 2 ? 'grid-cols-2' : 'grid-cols-1');
+
+/**
+ * Grid rows come from the real lesson start times: starts less than 30 minutes apart share
+ * a row. Works for 90-minute blocks and 50-minute school periods alike.
+ */
+function buildPeriods(schedule: ScheduleBlock[]): Period[] {
+  const starts = Array.from(new Set(schedule.map((b) => timeToMinutes(b.startTime)))).sort((a, b) => a - b);
+  const clusters: number[][] = [];
+  for (const start of starts) {
+    const last = clusters[clusters.length - 1];
+    if (last && start - last[last.length - 1] <= 30) last.push(start);
+    else clusters.push([start]);
+  }
+  return clusters.map((cluster, i) => {
+    const startMin = cluster[0];
+    const lastStartMin = cluster[cluster.length - 1];
+    const endMin = Math.max(
+      ...schedule
+        .filter((b) => {
+          const s = timeToMinutes(b.startTime);
+          return s >= startMin && s <= lastStartMin;
+        })
+        .map((b) => timeToMinutes(b.endTime))
+    );
+    return { id: i + 1, startMin, lastStartMin, endMin };
+  });
+}
+
+function useClock() {
+  const [now, setNow] = useState<{ weekday: number; minutes: number } | null>(null);
+  useEffect(() => {
+    const update = () => {
+      const d = new Date();
+      setNow({ weekday: d.getDay(), minutes: d.getHours() * 60 + d.getMinutes() });
+    };
+    update();
+    const id = setInterval(update, 30_000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
 
 export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   schedule,
-  subjects = [],
+  untisConfig,
   onToggleTaskStatus,
   onOpenUntisModal,
-  onOpenCreateTask,
+  onCreateTask,
+  onEditTask,
 }) => {
-  const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
-  const [selectedDay, setSelectedDay] = useState<number>(1);
-  const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [inspectBlock, setInspectBlock] = useState<ScheduleBlock | null>(null);
+  const clock = useClock();
+  const schoolDay = clock && clock.weekday >= 1 && clock.weekday <= 5 ? clock.weekday : null;
+  const minutesNow = clock?.minutes ?? -1;
 
-  const [currentTimeStr, setCurrentTimeStr] = useState('');
-  const [currentMinutesFromMidnight, setCurrentMinutesFromMidnight] = useState(0);
-  const [currentDayOfWeek, setCurrentDayOfWeek] = useState(1);
+  const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
+  const [selectedDay, setSelectedDay] = useState(1);
+  const [subjectFilter, setSubjectFilter] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [inspectId, setInspectId] = useState<string | null>(null);
 
   useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      const currentDay = now.getDay(); // 0 = Sun, 1 = Mon ...
-      const activeDay = currentDay >= 1 && currentDay <= 5 ? currentDay : 1;
-      setCurrentDayOfWeek(activeDay);
-      if (!selectedDay) setSelectedDay(activeDay);
+    const weekday = new Date().getDay();
+    setSelectedDay(weekday >= 1 && weekday <= 5 ? weekday : 1);
+    // The five-day grid is too wide for phones – start in the day view there.
+    if (window.matchMedia('(max-width: 767px)').matches) setViewMode('day');
+  }, []);
 
-      const hours = now.getHours();
-      const mins = now.getMinutes();
-      setCurrentTimeStr(
-        `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`
-      );
-      setCurrentMinutesFromMidnight(hours * 60 + mins);
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.querySelector('[role="dialog"]')) setIsFullscreen(false);
     };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isFullscreen]);
 
-    updateTime();
-    const interval = setInterval(updateTime, 30000);
-    return () => clearInterval(interval);
-  }, [selectedDay]);
-
-  const timeToMinutes = (timeStr: string) => {
-    if (!timeStr) return 0;
-    const [h, m] = timeStr.split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
+  const periods = useMemo(() => buildPeriods(schedule), [schedule]);
+  const periodOf = (b: ScheduleBlock) => {
+    const start = timeToMinutes(b.startTime);
+    return periods.find((p) => start >= p.startMin && start <= p.lastStartMin)?.id ?? 0;
   };
 
-  // Find period match for a lesson block
-  const getPeriodForBlock = (block: ScheduleBlock) => {
-    const startMin = timeToMinutes(block.startTime);
-    for (let i = 0; i < STANDARD_PERIODS.length; i++) {
-      const p = STANDARD_PERIODS[i];
-      // If block starts within 30 min of period start
-      if (Math.abs(startMin - p.startMin) <= 45 || (startMin >= p.startMin - 15 && startMin < p.endMin)) {
-        return p.id;
-      }
+  const subjects = useMemo(() => {
+    const map = new Map<string, { code: string; name: string; colorHex: string; count: number }>();
+    for (const b of schedule) {
+      const code = blockCode(b);
+      const entry = map.get(code);
+      if (entry) entry.count++;
+      else map.set(code, { code, name: blockName(b), colorHex: b.colorHex, count: 1 });
     }
-    // Fallback based on hour
-    if (startMin < 9 * 60 + 40) return 1;
-    if (startMin < 11 * 60 + 30) return 2;
-    if (startMin < 13 * 60 + 20) return 3;
-    if (startMin < 15 * 60 + 10) return 4;
-    if (startMin < 17 * 60) return 5;
-    return 6;
-  };
-
-  // Extract unique subject codes or names for filter bar
-  const uniqueSubjects = useMemo(() => {
-    const set = new Map<string, { code: string; name: string; colorHex: string }>();
-    schedule.forEach((b) => {
-      const code = b.subjectCode || b.title.slice(0, 3).toUpperCase();
-      if (!set.has(code)) {
-        set.set(code, {
-          code,
-          name: b.title.split('(')[0].trim(),
-          colorHex: b.colorHex || '#6366F1',
-        });
-      }
-    });
-    return Array.from(set.values());
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'de'));
   }, [schedule]);
 
-  // Lessons filtered by subject if active
-  const filteredSchedule = useMemo(() => {
-    if (!selectedSubjectFilter) return schedule;
-    return schedule.filter((b) => {
-      const code = b.subjectCode || b.title.slice(0, 3).toUpperCase();
-      return code.toLowerCase() === selectedSubjectFilter.toLowerCase();
-    });
-  }, [schedule, selectedSubjectFilter]);
+  const filtered = subjectFilter ? schedule.filter((b) => blockCode(b) === subjectFilter) : schedule;
 
-  // Active lesson right now (if today)
-  const todaySchedule = schedule.filter((b) => b.dayOfWeek === currentDayOfWeek);
-  const activeBlock = todaySchedule.find((b) => {
-    const start = timeToMinutes(b.startTime);
-    const end = timeToMinutes(b.endTime);
-    return currentMinutesFromMidnight >= start && currentMinutesFromMidnight <= end;
-  });
+  const todayLessons = schoolDay
+    ? schedule
+        .filter((b) => b.dayOfWeek === schoolDay && !b.isCancelled)
+        .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime))
+    : [];
+  const isNow = (b: ScheduleBlock) =>
+    b.dayOfWeek === schoolDay && !b.isCancelled && minutesNow >= timeToMinutes(b.startTime) && minutesNow < timeToMinutes(b.endTime);
+  const activeBlock = todayLessons.find(isNow);
+  const nextBlock = activeBlock ? undefined : todayLessons.find((b) => timeToMinutes(b.startTime) > minutesNow);
+  const spotlight = activeBlock ?? nextBlock;
+  const inspectBlock = schedule.find((b) => b.id === inspectId) ?? null;
 
-  // Next upcoming lesson today
-  const nextBlock = todaySchedule
-    .filter((b) => timeToMinutes(b.startTime) > currentMinutesFromMidnight)
-    .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime))[0];
+  const isDemo = untisConfig?.school === DEMO_SCHOOL;
+  const syncFailed = untisConfig?.isConnected === false;
+  const lastSync =
+    clock && untisConfig?.lastSyncAt ? formatDistanceToNow(new Date(untisConfig.lastSyncAt), { addSuffix: true, locale: de }) : null;
 
-  // Day schedule for day view
-  const selectedDaySchedule = filteredSchedule
-    .filter((b) => b.dayOfWeek === selectedDay)
-    .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
-
-  // Render Lesson Card for Grid
-  const renderGridLessonCard = (block: ScheduleBlock) => {
-    const isFilteredOut = selectedSubjectFilter && 
-      (block.subjectCode || block.title.slice(0, 3)).toUpperCase() !== selectedSubjectFilter.toUpperCase();
-    const hasTasks = block.tasks && block.tasks.length > 0;
-    const pendingTasks = block.tasks ? block.tasks.filter(t => t.status !== 'done') : [];
-    const isToday = block.dayOfWeek === currentDayOfWeek;
-    const startMin = timeToMinutes(block.startTime);
-    const endMin = timeToMinutes(block.endTime);
-    const isCurrent = isToday && currentMinutesFromMidnight >= startMin && currentMinutesFromMidnight <= endMin;
-
+  const renderGridCard = (block: ScheduleBlock, compact: boolean) => {
+    const pending = block.tasks?.filter((t) => t.status !== 'done').length ?? 0;
     return (
-      <div
+      <button
         key={block.id}
-        onClick={() => setInspectBlock(block)}
-        className={`group relative rounded-2xl p-3 text-left border transition-all cursor-pointer flex flex-col justify-between ${
-          isFilteredOut ? 'opacity-25 scale-98' : 'opacity-100 hover:scale-[1.02]'
-        } ${
-          isCurrent
-            ? 'bg-[#181E30] border-purple-500/60 ring-2 ring-purple-500/30 shadow-lg shadow-purple-950/40'
-            : 'bg-[#131722] hover:bg-[#181D2B] border-white/[0.08] hover:border-purple-500/30'
-        }`}
-        style={{
-          borderLeftWidth: '4px',
-          borderLeftColor: block.colorHex || '#6366F1',
-        }}
+        type="button"
+        onClick={() => setInspectId(block.id)}
+        title={`${blockName(block)} · ${block.startTime}–${block.endTime}${block.room ? ` · ${block.room}` : ''}${block.teacher ? ` · ${block.teacher}` : ''}`}
+        className={`block w-full min-w-0 rounded-[8px] border-l-[3px] text-left transition-[filter] hover:brightness-95 ${compact ? 'px-1.5 py-1.5' : 'p-2'} ${
+          block.isCancelled ? 'hatch' : ''
+        } ${isNow(block) ? 'ring-2 ring-marker ring-offset-1 ring-offset-sheet' : ''}`}
+        style={{ borderLeftColor: block.colorHex, backgroundColor: `${block.colorHex}1f` }}
       >
-        {/* Top: Subject Code & Time */}
-        <div>
-          <div className="flex items-center justify-between gap-1.5 mb-1.5">
-            <span
-              className="px-2 py-0.5 rounded-lg text-[10px] font-bold tracking-wider uppercase font-mono shadow-xs"
-              style={{
-                backgroundColor: `${block.colorHex || '#6366F1'}22`,
-                color: block.colorHex || '#818CF8',
-              }}
-            >
-              {block.subjectCode || block.title.slice(0, 3).toUpperCase()}
+        <span className="flex items-baseline justify-between gap-1">
+          <span
+            className={`truncate font-display font-bold leading-none text-ink ${compact ? 'text-[14px]' : 'text-[16px]'} ${
+              block.isCancelled ? 'line-through decoration-pen decoration-2' : ''
+            }`}
+          >
+            {blockCode(block)}
+          </span>
+          {pending > 0 && (
+            <span className="rounded bg-accent px-1 font-mono text-[10px] font-semibold leading-4 text-on-accent" title="Offene Hausübungen">
+              {compact ? pending : `${pending} HÜ`}
             </span>
-
-            <span className="text-[10px] font-mono text-muted group-hover:text-white transition-colors">
-              {block.startTime} – {block.endTime}
-            </span>
-          </div>
-
-          {/* Title */}
-          <div className="text-xs font-semibold text-white line-clamp-1 group-hover:text-purple-300 transition-colors">
-            {block.title}
-          </div>
-        </div>
-
-        {/* Bottom Metadata: High-Contrast Room Pill & Teacher */}
-        <div className="mt-2.5 pt-2 border-t border-white/[0.06] space-y-1.5">
-          <div className="flex items-center justify-between gap-1 flex-wrap">
-            {/* High Contrast Room Pill */}
-            {block.room ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#1C2234] text-purple-200 border border-purple-500/30 shadow-xs">
-                <MapPin className="h-2.5 w-2.5 text-purple-400" />
-                <span>{block.room}</span>
-              </span>
-            ) : (
-              <span className="text-[10px] text-muted">—</span>
-            )}
-
-            {/* Teacher Pill */}
-            {block.teacher && (
-              <span className="text-[10px] text-muted flex items-center gap-0.5 truncate max-w-[90px]">
-                <User className="h-2.5 w-2.5 text-muted-200 flex-shrink-0" />
-                <span className="truncate">{block.teacher.split(' ').slice(-1)[0]}</span>
-              </span>
-            )}
-          </div>
-
-          {/* Vertretung / Entfall notice */}
-          {block.substitutionNote && (
-            <div className="flex items-center gap-1 text-[9px] font-semibold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded">
-              <AlertTriangle className="h-2.5 w-2.5 flex-shrink-0" />
-              <span className="truncate">{block.substitutionNote}</span>
-            </div>
           )}
+        </span>
+        {!compact && <span className="mt-1 line-clamp-2 block text-[12px] font-bold leading-tight text-ink-2">{blockName(block)}</span>}
+        {block.room && <span className="mt-1 block truncate font-mono text-[11px] text-ink-3">{block.room}</span>}
+        {block.substitutionNote && (
+          <span className={`mt-1 block truncate text-[11px] font-bold ${block.isCancelled ? 'text-pen' : 'text-warn'}`}>
+            {compact ? (block.isCancelled ? 'Entfällt' : 'Änderung') : block.substitutionNote}
+          </span>
+        )}
+      </button>
+    );
+  };
 
-          {/* Attached Homework Counter Pill */}
-          {hasTasks && (
-            <div className="flex items-center justify-between pt-0.5">
-              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${
-                pendingTasks.length > 0 
-                  ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' 
-                  : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-              }`}>
-                <BookOpen className="h-2.5 w-2.5" />
-                <span>
-                  {pendingTasks.length > 0 
-                    ? `${pendingTasks.length} HÜ offen` 
-                    : 'Alle HÜ erledigt'}
-                </span>
-              </span>
-            </div>
-          )}
-        </div>
+  const renderHomework = (hw: Task) => {
+    const isDone = hw.status === 'done';
+    return (
+      <div key={hw.id} className="flex items-center gap-3 py-1.5">
+        <CheckButton checked={isDone} onChange={() => onToggleTaskStatus(hw)} label={isDone ? 'Wieder öffnen' : 'Erledigt'} />
+        <button
+          type="button"
+          onClick={() => onEditTask(hw)}
+          className={`min-w-0 flex-1 truncate text-left text-[14px] ${isDone ? 'text-ink-3 line-through' : 'font-bold text-ink'}`}
+        >
+          {hw.title}
+        </button>
+        <span className="flex-shrink-0 font-mono text-[12px] text-ink-3 tabular">{hw.estimatedMinutes} min</span>
       </div>
     );
   };
 
-  return (
-    <div className={`rounded-3xl bg-[#0C1019] border border-white/[0.08] p-5 sm:p-6 shadow-bento glow-card transition-all ${
-      isFullscreen ? 'fixed inset-4 z-50 overflow-y-auto bg-[#0A0D15]/95 backdrop-blur-2xl border-purple-500/40' : ''
-    }`}>
-      {/* Top Header Bar */}
-      <div className="flex items-center justify-between flex-wrap gap-4 mb-5">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-2xl bg-purple-500/10 text-purple-400 border border-purple-500/20 shadow-inner">
-            <School className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-semibold text-white tracking-tight">
-                Stundenplan & WebUntis
-              </h2>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Untis Live
-              </span>
-            </div>
-            <p className="text-xs text-muted">
-              Wochen-Matrix, Raum-Navigation & Fächer-Hausaufgaben
-            </p>
-          </div>
-        </div>
-
-        {/* View Switcher & Actions */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Week / Day View Mode Toggle */}
-          <div className="flex items-center gap-1 bg-[#141824] p-1 rounded-2xl border border-white/5 text-xs">
-            <button
-              onClick={() => setViewMode('week')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-medium transition-all ${
-                viewMode === 'week'
-                  ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/30 font-semibold'
-                  : 'text-muted hover:text-white'
+  const renderDayCard = (block: ScheduleBlock, compact: boolean) => {
+    const current = isNow(block);
+    const pending = block.tasks?.filter((t) => t.status !== 'done').length ?? 0;
+    return (
+      <div
+        key={block.id}
+        className={`min-w-0 rounded-[10px] border border-l-[3px] border-line/10 ${compact ? 'p-2.5' : 'p-3'} ${block.isCancelled ? 'hatch' : ''} ${
+          current ? 'ring-2 ring-marker' : ''
+        }`}
+        style={{ borderLeftColor: block.colorHex }}
+      >
+        <button type="button" onClick={() => setInspectId(block.id)} className="block w-full min-w-0 text-left">
+          <span className="flex items-start justify-between gap-2">
+            <span
+              className={`min-w-0 font-display font-semibold leading-tight text-ink ${compact ? 'truncate text-[16px]' : 'text-[19px]'} ${
+                block.isCancelled ? 'line-through decoration-pen decoration-2' : ''
               }`}
             >
-              <Calendar className="h-3.5 w-3.5" />
-              <span>Wochen-Gitter</span>
-            </button>
-            <button
-              onClick={() => setViewMode('day')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-medium transition-all ${
-                viewMode === 'day'
-                  ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/30 font-semibold'
-                  : 'text-muted hover:text-white'
-              }`}
-            >
-              <Clock className="h-3.5 w-3.5" />
-              <span>Tagesfokus</span>
-            </button>
-          </div>
-
-          {/* Fullscreen Expand Button */}
-          <button
-            onClick={() => setIsFullscreen(!isFullscreen)}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-muted hover:text-white border border-white/5 transition-colors"
-            title={isFullscreen ? 'Vollbild verlassen' : 'Stundenplan vergrößern'}
-          >
-            {isFullscreen ? (
-              <Minimize2 className="h-4 w-4 text-purple-300" />
-            ) : (
-              <Maximize2 className="h-4 w-4 text-purple-300" />
-            )}
-          </button>
-
-          {/* WebUntis Configuration / Refresh */}
-          <button
-            onClick={onOpenUntisModal}
-            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-muted hover:text-white border border-white/5 transition-colors"
-            title="WebUntis Einstellungen & Sync"
-          >
-            <RefreshCw className="h-4 w-4 text-indigo-400 hover:rotate-90 transition-transform duration-300" />
-          </button>
-        </div>
-      </div>
-
-      {/* Subject Filter Bar */}
-      <div className="flex items-center gap-1.5 mb-5 overflow-x-auto pb-1.5 scrollbar-none">
-        <span className="text-[11px] text-muted flex items-center gap-1 mr-1 flex-shrink-0">
-          <Filter className="h-3 w-3" />
-          <span>Filter:</span>
-        </span>
-        <button
-          onClick={() => setSelectedSubjectFilter(null)}
-          className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-all whitespace-nowrap ${
-            selectedSubjectFilter === null
-              ? 'bg-white/15 text-white font-semibold border border-white/20'
-              : 'bg-[#141824] text-muted hover:text-white border border-white/5'
-          }`}
-        >
-          Alle Fächer ({schedule.length})
+              {current ? <span className="marker">{blockName(block)}</span> : blockName(block)}
+            </span>
+            {!compact && <span className="chip mt-0.5 font-mono">{blockCode(block)}</span>}
+          </span>
+          {(block.room || block.teacher) && (
+            <span className="mt-0.5 block truncate font-mono text-[12px] text-ink-3">
+              {compact ? block.room ?? block.teacher : [block.room, block.teacher].filter(Boolean).join(' · ')}
+            </span>
+          )}
+          {compact && pending > 0 && <span className="mt-1 block text-[12px] font-bold text-accent">{pending} HÜ offen</span>}
         </button>
-
-        {uniqueSubjects.map((s) => {
-          const count = schedule.filter(b => (b.subjectCode || b.title.slice(0, 3)).toUpperCase() === s.code.toUpperCase()).length;
-          const isSelected = selectedSubjectFilter?.toUpperCase() === s.code.toUpperCase();
-          return (
+        {block.substitutionNote && (
+          <p className={`mt-1.5 text-[13px] font-bold ${block.isCancelled ? 'text-pen' : 'text-warn'} ${compact ? 'truncate' : ''}`}>{block.substitutionNote}</p>
+        )}
+        {!compact && (
+          <>
+            {block.tasks && block.tasks.length > 0 && <div className="mt-2 border-t border-line/10 pt-1">{block.tasks.map(renderHomework)}</div>}
             <button
-              key={s.code}
-              onClick={() => setSelectedSubjectFilter(isSelected ? null : s.code)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-medium transition-all whitespace-nowrap ${
-                isSelected
-                  ? 'text-white font-semibold border shadow-xs'
-                  : 'bg-[#141824] text-muted hover:text-white border border-white/5'
-              }`}
-              style={{
-                backgroundColor: isSelected ? `${s.colorHex}30` : undefined,
-                borderColor: isSelected ? `${s.colorHex}60` : undefined,
-                color: isSelected ? s.colorHex : undefined,
-              }}
+              type="button"
+              onClick={() => onCreateTask(block.subjectId)}
+              className="mt-1 inline-flex items-center gap-1 rounded py-1 text-[13px] font-bold text-accent hover:underline"
             >
-              <span 
-                className="h-2 w-2 rounded-full" 
-                style={{ backgroundColor: s.colorHex }}
-              />
-              <span>{s.name}</span>
-              <span className="font-mono text-[10px] opacity-70">({count})</span>
+              <Plus className="h-3.5 w-3.5" /> Hausübung
             </button>
-          );
-        })}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const dayGroups = groupOverlapping(filtered.filter((b) => b.dayOfWeek === selectedDay));
+
+  return (
+    <section
+      className={`card ${isFullscreen ? 'fixed inset-0 z-40 overflow-y-auto rounded-none sm:inset-4 sm:rounded-[16px]' : ''}`}
+      aria-label="Stundenplan"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3 p-4 pb-3 sm:p-5 sm:pb-3">
+        <div className="min-w-0">
+          <p className="eyebrow">{untisConfig?.timetableScope === 'class' ? 'Klassenstundenplan' : 'Mein Stundenplan'}</p>
+          <h2 className="card-title mt-1 truncate">{untisConfig?.schoolName ?? 'Stundenplan'}</h2>
+          {syncFailed ? (
+            <button type="button" onClick={onOpenUntisModal} className="mt-1 flex items-center gap-1.5 text-[13px] font-bold text-pen">
+              <AlertTriangle className="h-3.5 w-3.5" /> Sync fehlgeschlagen – Zugangsdaten prüfen
+            </button>
+          ) : (
+            <p className="mt-1 text-[13px] text-ink-3">
+              {isDemo ? 'Beispiel-Stundenplan' : 'WebUntis'}
+              {lastSync && ` · aktualisiert ${lastSync}`}
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1">
+          <div className="segmented w-[148px] grid-cols-2" role="group" aria-label="Ansicht">
+            <button type="button" aria-pressed={viewMode === 'week'} onClick={() => setViewMode('week')} className="segmented-item min-h-[34px]">
+              Woche
+            </button>
+            <button type="button" aria-pressed={viewMode === 'day'} onClick={() => setViewMode('day')} className="segmented-item min-h-[34px]">
+              Tag
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((v) => !v)}
+            className="icon-btn hidden md:inline-flex"
+            aria-label={isFullscreen ? 'Vollbild verlassen' : 'Vollbild'}
+            title={isFullscreen ? 'Vollbild verlassen (Esc)' : 'Vollbild'}
+          >
+            {isFullscreen ? <Minimize2 className="h-[18px] w-[18px]" /> : <Maximize2 className="h-[18px] w-[18px]" />}
+          </button>
+          <button type="button" onClick={onOpenUntisModal} className="icon-btn" aria-label="WebUntis-Einstellungen" title="WebUntis-Einstellungen & Sync">
+            <RefreshCw className="h-[18px] w-[18px]" />
+          </button>
+        </div>
       </div>
 
-      {/* Live Classroom Radar Spotlight */}
-      {activeBlock && (
-        <div className="mb-5 rounded-2xl bg-gradient-to-r from-purple-950/40 via-[#181B2B] to-[#121624] border border-purple-500/40 p-4 relative overflow-hidden animate-in fade-in shadow-lg shadow-purple-950/20">
-          <div className="flex items-center justify-between text-xs mb-2">
-            <span className="font-semibold text-purple-300 flex items-center gap-2">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-              </span>
-              JETZT IM UNTERRICHT ({activeBlock.startTime} – {activeBlock.endTime})
-            </span>
-            <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-200 border border-purple-500/30">
-              Noch {Math.max(0, timeToMinutes(activeBlock.endTime) - currentMinutesFromMidnight)} Min verbleibend
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <div>
-              <div className="text-sm sm:text-base font-bold text-white mb-1">
-                {activeBlock.title}
-              </div>
-              <div className="flex items-center gap-3 text-xs text-muted">
-                {activeBlock.room && (
-                  <span className="flex items-center gap-1 text-purple-300 font-bold bg-[#1B2135] px-2 py-0.5 rounded-md border border-purple-500/30">
-                    <MapPin className="h-3 w-3 text-purple-400" />
-                    {activeBlock.room}
-                  </span>
-                )}
-                {activeBlock.teacher && (
-                  <span className="flex items-center gap-1 text-white/80">
-                    <User className="h-3 w-3 text-purple-400" />
-                    {activeBlock.teacher}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Quick Button to inspect / view homework */}
-            <button
-              onClick={() => setInspectBlock(activeBlock)}
-              className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium transition-all shadow-sm"
-            >
-              Details & Hausaufgaben anzeigen
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ===================================================================== */}
-      {/* VIEW 1: ADVANCED TIMETABLE MATRIX (Period Rows x Monday-Friday Columns) */}
-      {/* ===================================================================== */}
-      {viewMode === 'week' ? (
-        <div className="space-y-3">
-          {/* Schedule Grid Container */}
-          <div className="overflow-x-auto pb-2 scrollbar-thin">
-            <div className="min-w-[760px]">
-              {/* Header: Days Mon-Fri */}
-              <div className="grid grid-cols-6 gap-2 mb-2">
-                {/* Top-left corner: Time / Period label */}
-                <div className="rounded-xl bg-[#121622] p-2.5 text-center text-xs font-semibold text-muted border border-white/5 flex items-center justify-center">
-                  <span>Stunde / Zeit</span>
-                </div>
-
-                {DAYS.map((d) => {
-                  const isToday = d.num === currentDayOfWeek;
-                  const dayLessonsCount = filteredSchedule.filter((b) => b.dayOfWeek === d.num).length;
-                  return (
-                    <div
-                      key={d.num}
-                      onClick={() => {
-                        setSelectedDay(d.num);
-                        setViewMode('day');
-                      }}
-                      className={`rounded-xl p-2.5 text-center border transition-all cursor-pointer ${
-                        isToday
-                          ? 'bg-purple-950/30 border-purple-500/50 shadow-sm shadow-purple-900/20'
-                          : 'bg-[#121622] hover:bg-[#161B28] border-white/5'
-                      }`}
-                    >
-                      <div className="flex items-center justify-center gap-1.5">
-                        <span className={`text-xs font-bold ${isToday ? 'text-purple-300' : 'text-white'}`}>
-                          {d.name}
-                        </span>
-                        {isToday && (
-                          <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />
-                        )}
-                      </div>
-                      <div className="text-[10px] text-muted mt-0.5 font-mono">
-                        {dayLessonsCount} {dayLessonsCount === 1 ? 'Einheit' : 'Einheiten'}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Grid Rows: Period by Period */}
-              <div className="space-y-2">
-                {STANDARD_PERIODS.map((period) => {
-                  return (
-                    <div key={period.id} className="grid grid-cols-6 gap-2">
-                      {/* Period Header Column */}
-                      <div className="rounded-2xl bg-[#101420] border border-white/5 p-2 flex flex-col justify-center items-center text-center">
-                        <span className="text-xs font-bold text-white/90">
-                          {period.label}
-                        </span>
-                        <span className="text-[10px] font-mono text-muted mt-0.5">
-                          {period.timeRange}
-                        </span>
-                      </div>
-
-                      {/* 5 Day Cells for this Period */}
-                      {DAYS.map((day) => {
-                        // Find all lessons for this day in this period
-                        const lessonsInSlot = filteredSchedule.filter((b) => {
-                          if (b.dayOfWeek !== day.num) return false;
-                          const pId = getPeriodForBlock(b);
-                          return pId === period.id;
-                        });
-
-                        const isToday = day.num === currentDayOfWeek;
-
-                        return (
-                          <div
-                            key={`${day.num}-${period.id}`}
-                            className={`min-h-[110px] rounded-2xl p-1.5 transition-all border ${
-                              isToday
-                                ? 'bg-[#101422]/60 border-purple-500/20'
-                                : 'bg-[#0E121C]/40 border-white/[0.04]'
-                            }`}
-                          >
-                            {lessonsInSlot.length === 0 ? (
-                              <div className="h-full flex items-center justify-center rounded-xl hover:bg-white/[0.02] transition-colors group">
-                                <span className="text-[10px] text-white/20 font-mono group-hover:text-muted">
-                                  —
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="space-y-1.5 h-full">
-                                {lessonsInSlot.map((block) => renderGridLessonCard(block))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+      {schedule.length === 0 ? (
+        <div className="px-4 pb-8 pt-4 text-center sm:px-5">
+          <School className="mx-auto mb-3 h-8 w-8 text-ink-3" />
+          <p className="font-bold text-ink">Noch kein Stundenplan</p>
+          <p className="mb-4 mt-1 text-[14px] text-ink-2">Verbinde WebUntis, dann erscheinen hier deine Stunden.</p>
+          <button type="button" onClick={onOpenUntisModal} className="btn-primary">
+            WebUntis verbinden
+          </button>
         </div>
       ) : (
-        /* ===================================================================== */
-        /* VIEW 2: DAY FOCUS VIEW (Interactive Timeline with Checklist)          */
-        /* ===================================================================== */
-        <div className="space-y-4">
-          {/* Day Selector Pills */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-            {DAYS.map((d) => {
-              const isSelected = selectedDay === d.num;
-              const count = schedule.filter((s) => s.dayOfWeek === d.num).length;
-              return (
+        <>
+          {subjects.length > 1 && (
+            <div className="scrollbar-none flex gap-1 overflow-x-auto px-4 pb-3 sm:px-5" role="group" aria-label="Nach Fach filtern">
+              <button type="button" aria-pressed={subjectFilter === null} onClick={() => setSubjectFilter(null)} className="tab h-8 px-3 text-[13px]">
+                Alle
+              </button>
+              {subjects.map((s) => (
                 <button
-                  key={d.num}
-                  onClick={() => setSelectedDay(d.num)}
-                  className={`flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
-                    isSelected
-                      ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30 border border-purple-400/40'
-                      : 'bg-[#141824] text-muted hover:text-white border border-white/5'
-                  }`}
+                  key={s.code}
+                  type="button"
+                  aria-pressed={subjectFilter === s.code}
+                  onClick={() => setSubjectFilter(subjectFilter === s.code ? null : s.code)}
+                  className="tab h-8 px-3 text-[13px]"
                 >
-                  <span>{d.name}</span>
-                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 font-mono">
-                    {count} Std
-                  </span>
+                  <span className="h-2 w-2 rounded-[2px]" style={{ backgroundColor: s.colorHex }} />
+                  {s.name}
                 </button>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
 
-          {/* Day Timeline List */}
-          <div className="space-y-3 relative before:absolute before:left-3.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-white/10">
-            {selectedDaySchedule.length === 0 ? (
-              <div className="py-12 text-center text-xs text-muted">
-                Kein Unterricht an diesem Tag eingetragen.
-              </div>
-            ) : (
-              selectedDaySchedule.map((block) => {
-                const startMin = timeToMinutes(block.startTime);
-                const endMin = timeToMinutes(block.endTime);
-                const isCurrent = block.dayOfWeek === currentDayOfWeek && 
-                  currentMinutesFromMidnight >= startMin && currentMinutesFromMidnight <= endMin;
-                const isPassed = block.dayOfWeek === currentDayOfWeek && currentMinutesFromMidnight > endMin;
-                const hasTasks = block.tasks && block.tasks.length > 0;
-
-                return (
-                  <div
-                    key={block.id}
-                    className={`relative pl-8 transition-all ${
-                      isPassed ? 'opacity-50' : 'opacity-100'
-                    }`}
-                  >
-                    {/* Bullet */}
-                    <div
-                      className={`absolute left-2.5 top-4 h-3 w-3 rounded-full -translate-x-1/2 border-2 border-[#0C1019] ${
-                        isCurrent
-                          ? 'bg-purple-400 ring-4 ring-purple-500/30'
-                          : isPassed
-                          ? 'bg-muted'
-                          : 'bg-indigo-400'
-                      }`}
-                    />
-
-                    {/* Lesson Detail Card */}
-                    <div
-                      className={`rounded-2xl p-4 border transition-all ${
-                        isCurrent
-                          ? 'bg-[#181E30] border-purple-500/50 shadow-lg shadow-purple-900/30'
-                          : 'bg-[#131724] border-white/5 hover:border-white/10'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3 mb-2 flex-wrap">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="px-2.5 py-1 rounded-lg bg-white/5 font-mono text-xs text-muted-200">
-                            {block.startTime} – {block.endTime}
-                          </span>
-
-                          {block.subjectCode && (
-                            <span
-                              className="px-2 py-0.5 rounded-md text-[11px] font-bold uppercase tracking-wider"
-                              style={{
-                                backgroundColor: `${block.colorHex}25`,
-                                color: block.colorHex,
-                              }}
-                            >
-                              {block.subjectCode}
-                            </span>
-                          )}
-
-                          {block.substitutionNote && (
-                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                              <AlertTriangle className="h-3 w-3" />
-                              {block.substitutionNote}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {/* High Contrast Room Pill */}
-                          {block.room && (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-[#1E243A] text-purple-200 border border-purple-500/40 shadow-sm">
-                              <MapPin className="h-3.5 w-3.5 text-purple-400" />
-                              <span>{block.room}</span>
-                            </span>
-                          )}
-
-                          {block.teacher && (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-muted bg-white/5">
-                              <User className="h-3 w-3 text-muted-200" />
-                              <span>{block.teacher}</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Lesson Title */}
-                      <div className="text-sm sm:text-base font-bold text-white mb-2">
-                        {block.title}
-                      </div>
-
-                      {/* ========================================================= */}
-                      {/* EMBEDDED HOMEWORK CHECKLIST (Instant 0ms status toggles)   */}
-                      {/* ========================================================= */}
-                      {hasTasks && (
-                        <div className="mt-3 pt-3 border-t border-white/[0.06] space-y-2">
-                          <div className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider flex items-center justify-between">
-                            <span className="flex items-center gap-1.5">
-                              <BookOpen className="h-3.5 w-3.5" />
-                              <span>Verknüpfte Hausaufgaben für diese Stunde:</span>
-                            </span>
-                            <span className="font-mono text-[10px] text-muted">
-                              {block.tasks!.filter(t => t.status === 'done').length}/{block.tasks!.length} erledigt
-                            </span>
-                          </div>
-
-                          <div className="space-y-1.5">
-                            {block.tasks!.map((hw) => {
-                              const isDone = hw.status === 'done';
-                              return (
-                                <div
-                                  key={hw.id}
-                                  className={`flex items-start justify-between gap-3 p-2.5 rounded-xl text-xs transition-all ${
-                                    isDone
-                                      ? 'bg-black/30 text-muted opacity-60 line-through'
-                                      : 'bg-indigo-950/40 border border-indigo-500/25 text-white shadow-xs'
-                                  }`}
-                                >
-                                  <div className="flex items-start gap-2.5 min-w-0">
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onToggleTaskStatus(hw);
-                                        if (!isDone) fireMilestoneGlow();
-                                      }}
-                                      className="mt-0.5 text-muted hover:text-indigo-400 flex-shrink-0"
-                                      title={isDone ? 'Wieder öffnen' : 'Als erledigt markieren'}
-                                    >
-                                      {isDone ? (
-                                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                                      ) : (
-                                        <Circle className="h-4 w-4 hover:text-indigo-400" />
-                                      )}
-                                    </button>
-                                    <div className="min-w-0">
-                                      <div className="font-medium truncate">
-                                        {hw.title}
-                                      </div>
-                                      {hw.description && (
-                                        <div className="text-[10px] text-muted line-clamp-1 mt-0.5">
-                                          {hw.description}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 text-indigo-300">
-                                      ⏱️ {hw.estimatedMinutes}m
-                                    </span>
-                                    {hw.isUntisSync && (
-                                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300">
-                                        UNTIS
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ===================================================================== */}
-      {/* MODAL: LESSON DETAIL INSPECTOR (Opened by clicking any lesson card)   */}
-      {/* ===================================================================== */}
-      {inspectBlock && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in">
-          <div className="relative w-full max-w-lg rounded-3xl bg-[#0F131E] border border-white/10 p-6 shadow-2xl">
-            {/* Close Button */}
+          {spotlight && (
             <button
-              onClick={() => setInspectBlock(null)}
-              className="absolute right-4 top-4 p-2 rounded-xl bg-white/5 hover:bg-white/10 text-muted hover:text-white transition-colors"
+              type="button"
+              onClick={() => setInspectId(spotlight.id)}
+              className="mx-4 mb-3 flex w-[calc(100%-2rem)] items-center justify-between gap-3 rounded-[10px] border border-line/10 bg-inset px-3 py-2.5 text-left sm:mx-5 sm:w-[calc(100%-2.5rem)]"
             >
-              <X className="h-4 w-4" />
-            </button>
-
-            {/* Header with subject color badge */}
-            <div className="flex items-center gap-2.5 mb-3">
-              <span
-                className="px-2.5 py-1 rounded-lg text-xs font-bold font-mono uppercase"
-                style={{
-                  backgroundColor: `${inspectBlock.colorHex}25`,
-                  color: inspectBlock.colorHex,
-                }}
-              >
-                {inspectBlock.subjectCode || 'FACH'}
-              </span>
-              <span className="text-xs font-mono text-muted">
-                {DAYS.find(d => d.num === inspectBlock.dayOfWeek)?.name} • {inspectBlock.startTime} – {inspectBlock.endTime}
-              </span>
-            </div>
-
-            <h3 className="text-lg font-bold text-white mb-4">
-              {inspectBlock.title}
-            </h3>
-
-            {/* Metadata Pills */}
-            <div className="grid grid-cols-2 gap-2.5 mb-5">
-              <div className="p-3 rounded-2xl bg-[#141926] border border-white/5">
-                <span className="text-[10px] text-muted block mb-1">Raum & Ort</span>
-                <div className="flex items-center gap-1.5 text-sm font-bold text-purple-200">
-                  <MapPin className="h-4 w-4 text-purple-400" />
-                  <span>{inspectBlock.room || 'Kein Raum hinterlegt'}</span>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-[#141926] border border-white/5">
-                <span className="text-[10px] text-muted block mb-1">Lehrkraft</span>
-                <div className="flex items-center gap-1.5 text-sm font-semibold text-white">
-                  <User className="h-4 w-4 text-purple-400" />
-                  <span>{inspectBlock.teacher || 'Keine Lehrkraft angegeben'}</span>
-                </div>
-              </div>
-            </div>
-
-            {inspectBlock.substitutionNote && (
-              <div className="mb-5 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-start gap-2.5 text-xs text-amber-200">
-                <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-semibold mb-0.5">Vertretung / Raumänderung</div>
-                  <div>{inspectBlock.substitutionNote}</div>
-                </div>
-              </div>
-            )}
-
-            {/* Homework Tasks Section */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <BookOpen className="h-4 w-4" />
-                  <span>Hausaufgaben für diese Stunde ({inspectBlock.tasks?.length || 0})</span>
+              <span className="min-w-0">
+                <span className="eyebrow">
+                  {activeBlock
+                    ? `Jetzt · noch ${timeToMinutes(spotlight.endTime) - minutesNow} min`
+                    : `Als Nächstes · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`}
                 </span>
-                {onOpenCreateTask && (
-                  <button
-                    onClick={() => {
-                      const subjId = inspectBlock.subjectId;
-                      setInspectBlock(null);
-                      onOpenCreateTask(subjId || undefined);
-                    }}
-                    className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    <span>HÜ hinzufügen</span>
-                  </button>
-                )}
-              </div>
+                <span className="mt-0.5 block truncate font-display text-[20px] font-semibold leading-tight text-ink">
+                  <span className="marker">{blockName(spotlight)}</span>
+                </span>
+              </span>
+              <span className="flex-shrink-0 text-right font-mono text-[12px] text-ink-2 tabular">
+                {spotlight.startTime}–{spotlight.endTime}
+                {spotlight.room && <span className="block text-ink">{spotlight.room}</span>}
+              </span>
+            </button>
+          )}
 
-              {inspectBlock.tasks && inspectBlock.tasks.length > 0 ? (
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  {inspectBlock.tasks.map((task) => {
-                    const isDone = task.status === 'done';
+          {viewMode === 'week' ? (
+            <div className="overflow-x-auto px-4 pb-4 sm:px-5 sm:pb-5">
+              <div className="min-w-[680px]">
+                <div className="grid grid-cols-[58px_repeat(5,minmax(0,1fr))] gap-1.5 pb-1.5">
+                  <span />
+                  {DAYS.map((d) => {
+                    const count = filtered.filter((b) => b.dayOfWeek === d.num).length;
                     return (
-                      <div
-                        key={task.id}
-                        className={`flex items-start justify-between gap-3 p-3 rounded-2xl text-xs transition-all ${
-                          isDone
-                            ? 'bg-black/30 text-muted opacity-60 line-through'
-                            : 'bg-[#151A29] border border-indigo-500/30 text-white shadow-xs'
-                        }`}
+                      <button
+                        key={d.num}
+                        type="button"
+                        onClick={() => {
+                          setSelectedDay(d.num);
+                          setViewMode('day');
+                        }}
+                        className="rounded-md px-2 py-1 text-left hover:bg-inset"
+                        title={`${d.name} als Tagesansicht`}
                       >
-                        <div className="flex items-start gap-2.5 min-w-0">
-                          <button
-                            onClick={() => {
-                              onToggleTaskStatus(task);
-                              if (!isDone) fireMilestoneGlow();
-                              // Update local inspectBlock tasks optimistically
-                              setInspectBlock(prev => prev ? {
-                                ...prev,
-                                tasks: prev.tasks?.map(t => t.id === task.id ? { ...t, status: isDone ? 'backlog' : 'done' } : t)
-                              } : null);
-                            }}
-                            className="mt-0.5 text-muted hover:text-indigo-400 flex-shrink-0"
-                          >
-                            {isDone ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                            ) : (
-                              <Circle className="h-4 w-4 hover:text-indigo-400" />
-                            )}
-                          </button>
-                          <div>
-                            <div className="font-semibold text-sm">{task.title}</div>
-                            {task.description && (
-                              <div className="text-muted text-[11px] mt-0.5">{task.description}</div>
-                            )}
-                          </div>
-                        </div>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 text-indigo-300 flex-shrink-0">
-                          ⏱️ {task.estimatedMinutes}m
-                        </span>
-                      </div>
+                        <span className={`font-display text-[17px] font-semibold ${d.num === schoolDay ? 'marker text-ink' : 'text-ink-2'}`}>{d.name}</span>
+                        <span className="block font-mono text-[11px] text-ink-3">{count} Std.</span>
+                      </button>
                     );
                   })}
                 </div>
+
+                {periods.map((period) => (
+                  <div key={period.id} className="grid grid-cols-[58px_repeat(5,minmax(0,1fr))] gap-1.5 border-t border-line/10 py-1.5">
+                    <div className="pt-1 font-mono text-[12px] leading-tight text-ink-2 tabular">
+                      {minutesToTime(period.startMin)}
+                      <span className="block text-[11px] text-ink-3">{minutesToTime(period.endMin)}</span>
+                    </div>
+                    {DAYS.map((day) => {
+                      const lessons = filtered.filter((b) => b.dayOfWeek === day.num && periodOf(b) === period.id);
+                      return (
+                        <div
+                          key={day.num}
+                          className={`grid min-h-[68px] content-start gap-1 rounded-[9px] p-0.5 ${parallelGrid(lessons.length)} ${
+                            day.num === schoolDay ? 'bg-marker/[0.07]' : ''
+                          }`}
+                        >
+                          {lessons.map((b) => renderGridCard(b, lessons.length > 1))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="pb-4 sm:pb-5">
+              <div className="scrollbar-none flex gap-1 overflow-x-auto px-4 pb-3 sm:px-5" role="group" aria-label="Tag wählen">
+                {DAYS.map((d) => (
+                  <button key={d.num} type="button" aria-pressed={selectedDay === d.num} onClick={() => setSelectedDay(d.num)} className="tab flex-1 justify-center px-2">
+                    <span className="sm:hidden">{d.short}</span>
+                    <span className="hidden sm:inline">{d.name}</span>
+                    {d.num === schoolDay && <span className="h-1.5 w-1.5 rounded-full bg-marker" aria-label="heute" />}
+                  </button>
+                ))}
+              </div>
+
+              {dayGroups.length === 0 ? (
+                <p className="px-4 py-10 text-center text-[14px] text-ink-3 sm:px-5">Kein Unterricht an diesem Tag.</p>
               ) : (
-                <div className="p-4 rounded-2xl bg-[#141926] text-center text-xs text-muted">
-                  Keine Hausaufgaben für diese Stunde hinterlegt.
-                </div>
+                <ol className="space-y-2 px-4 sm:px-5">
+                  {dayGroups.map((group) => {
+                    const end = minutesToTime(Math.max(...group.map((b) => timeToMinutes(b.endTime))));
+                    const passed = selectedDay === schoolDay && minutesNow >= timeToMinutes(end);
+                    return (
+                      <li key={group[0].id} className={`flex gap-3 ${passed ? 'opacity-55' : ''}`}>
+                        <div className="w-11 flex-shrink-0 pt-2.5 text-right font-mono text-[13px] leading-tight text-ink-2 tabular">
+                          {group[0].startTime}
+                          <span className="block text-[11px] text-ink-3">{end}</span>
+                        </div>
+                        <div className={`grid min-w-0 flex-1 gap-2 ${group.length >= 3 ? 'grid-cols-2 sm:grid-cols-3' : group.length === 2 ? 'grid-cols-2' : ''}`}>
+                          {group.map((block) => renderDayCard(block, group.length > 1))}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
               )}
             </div>
+          )}
+        </>
+      )}
 
-            {/* Bottom Actions */}
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
-              <button
-                onClick={() => setInspectBlock(null)}
-                className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-semibold text-white transition-colors"
+      <Modal
+        isOpen={!!inspectBlock}
+        onClose={() => setInspectId(null)}
+        title={inspectBlock ? blockName(inspectBlock) : ''}
+        subtitle={
+          inspectBlock && `${DAYS.find((d) => d.num === inspectBlock.dayOfWeek)?.name ?? ''} · ${inspectBlock.startTime}–${inspectBlock.endTime}`
+        }
+        icon={<span className="h-3 w-3 rounded-[3px]" style={{ backgroundColor: inspectBlock?.colorHex }} />}
+      >
+        {inspectBlock && (
+          <div className="space-y-5">
+            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line/10 bg-line/10">
+              <div className="bg-sheet p-3">
+                <dt className="eyebrow">Raum</dt>
+                <dd className="mt-1 font-mono text-[15px] font-medium text-ink">{inspectBlock.room || '—'}</dd>
+              </div>
+              <div className="bg-sheet p-3">
+                <dt className="eyebrow">Lehrkraft</dt>
+                <dd className="mt-1 text-[15px] font-bold text-ink">{inspectBlock.teacher || '—'}</dd>
+              </div>
+            </dl>
+
+            {inspectBlock.substitutionNote && (
+              <p
+                className={`flex items-start gap-2 rounded-[10px] border p-3 text-[14px] ${
+                  inspectBlock.isCancelled ? 'border-pen/30 bg-pen/10 text-pen' : 'border-warn/30 bg-warn/10 text-warn'
+                }`}
               >
-                Schließen
-              </button>
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <span className="font-bold">{inspectBlock.substitutionNote}</span>
+              </p>
+            )}
+
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <h4 className="eyebrow">Hausübungen</h4>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const subjectId = inspectBlock.subjectId;
+                    setInspectId(null);
+                    onCreateTask(subjectId);
+                  }}
+                  className="btn-ghost h-8 px-2 text-accent"
+                >
+                  <Plus className="h-4 w-4" /> Hinzufügen
+                </button>
+              </div>
+              {inspectBlock.tasks && inspectBlock.tasks.length > 0 ? (
+                <div className="divide-y divide-line/10">{inspectBlock.tasks.map(renderHomework)}</div>
+              ) : (
+                <p className="rounded-[10px] bg-inset p-4 text-center text-[14px] text-ink-3">Keine Hausübungen für diese Stunde.</p>
+              )}
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </Modal>
+    </section>
   );
 };

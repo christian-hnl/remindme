@@ -1,4 +1,4 @@
-import { Priority } from "@/types";
+import type { Priority } from '@/types';
 
 export interface ParsedTask {
   type: 'task';
@@ -20,156 +20,191 @@ export interface ParsedTransaction {
 export interface ParsedDeposit {
   type: 'deposit';
   amount: number;
+  /** Free-text pot name; may be empty when the user only wrote "20€ sparen". */
   potName: string;
 }
 
 export type ParsedIntent = ParsedTask | ParsedTransaction | ParsedDeposit;
 
-export function parseNaturalLanguage(input: string): ParsedIntent | null {
-  const text = input.trim();
-  if (!text) return null;
+// Unicode regexes are built with the RegExp constructor: TypeScript rejects `u`-flag
+// literals in this project setup, and `\p{L}` is needed so umlauts count as letters.
+const re = (source: string, flags = 'iu') => new RegExp(source, flags);
 
-  // Check for Money/Transaction pattern: e.g. "15€ Döner", "4,50 € Bäcker", "+1200€ Gehalt", "25€ in MacBook sparen"
-  const moneyMatch = text.match(/([+-]?\d+(?:[.,]\d{1,2})?)\s*€/i) || text.match(/€\s*(\d+(?:[.,]\d{1,2})?)/i);
+/** Whole-word regex that treats umlauts as letters (JS `\b` is ASCII-only). */
+const word = (source: string, flags = 'iu') => re(String.raw`(?<![\p{L}\d])(?:${source})(?![\p{L}\d])`, flags);
 
-  if (moneyMatch) {
-    const rawAmount = moneyMatch[1].replace(',', '.');
-    const amountVal = Math.abs(parseFloat(rawAmount));
-    const isExplicitIncome = text.includes('+') || text.toLowerCase().includes('gehalt') || text.toLowerCase().includes('einnahme');
-    
-    // Check if it's a deposit into a savings pot: "sparen", "einzahlen", "in MacBook"
-    if (text.toLowerCase().includes('spar') || text.toLowerCase().includes('einzahl') || text.toLowerCase().includes('in ')) {
-      const potMatch = text.match(/(?:in|für)\s+([a-zA-Z0-9äöüÄÖÜ\s-]+?)(?:\s+spar|\s+einzahl|$)/i);
-      const potName = potMatch ? potMatch[1].trim() : "MacBook";
-      return {
-        type: 'deposit',
-        amount: amountVal,
-        potName: potName || "MacBook",
-      };
-    }
+const SUBJECTS: [string, string][] = [
+  ['mathematik|mathe', 'Mathe'],
+  ['physik', 'Physik'],
+  ['informatik|info', 'Informatik'],
+  ['chemie', 'Chemie'],
+  ['biologie|bio', 'Biologie'],
+  ['deutsch', 'Deutsch'],
+  ['englisch', 'Englisch'],
+  ['latein', 'Latein'],
+  ['französisch', 'Französisch'],
+  ['spanisch', 'Spanisch'],
+  ['geschichte', 'Geschichte'],
+  ['geographie|erdkunde', 'Geographie'],
+  ['bwl', 'BWL'],
+  ['vwl', 'VWL'],
+  ['sport', 'Sport'],
+  ['musik', 'Musik'],
+];
 
-    // Otherwise it's a regular transaction
-    let desc = text.replace(moneyMatch[0], '').replace(/\b(bar|karte|ausgabe|einnahme)\b/gi, '').trim();
-    if (!desc) desc = isExplicitIncome ? "Einnahme" : "Ausgabe";
+const CATEGORY_RULES: [RegExp, string][] = [
+  [word('miete|strom|handy|versicherung|netflix|spotify|abo|fitnessstudio|gym'), 'Fixkosten'],
+  [word('döner|bäcker|bäckerei|supermarkt|essen|rewe|edeka|lidl|aldi|penny|mensa|pizza|lebensmittel|einkauf'), 'Lebensmittel'],
+  [word('ticket|bahn|bus|tanken|taxi|uber|zug|öffis?'), 'Transport'],
+  [word('kaffee|kino|bier|bar|club|konzert|party|restaurant'), 'Freizeit'],
+  [word('buch|bücher|kurs|uni|schule|skript'), 'Bildung'],
+];
 
-    // Auto-detect category
-    let category = "Sonstiges";
-    const lower = text.toLowerCase();
-    if (lower.includes('döner') || lower.includes('bäcker') || lower.includes('supermarkt') || lower.includes('essen') || lower.includes('rewe') || lower.includes('edeka')) {
-      category = "Lebensmittel";
-    } else if (lower.includes('ticket') || lower.includes('bahn') || lower.includes('bus') || lower.includes('tanken')) {
-      category = "Transport";
-    } else if (lower.includes('kaffee') || lower.includes('bar') || lower.includes('kino') || lower.includes('bier')) {
-      category = "Freizeit";
-    } else if (lower.includes('buch') || lower.includes('kurs') || lower.includes('uni')) {
-      category = "Bildung";
-    } else if (isExplicitIncome) {
-      category = "Einkommen";
-    }
+const DEPOSIT_WORDS = 'sparen|spare|spart|einzahlen|einzahlung|zurücklegen|zurückgelegt|spartopf|sparschwein';
+const INCOME_WORDS = 'gehalt|lohn|einnahme|taschengeld|bekommen|erhalten|zurückbekommen|verkauft';
+const WEEKDAYS = ['sonntag', 'montag', 'dienstag', 'mittwoch', 'donnerstag', 'freitag', 'samstag'];
 
-    return {
-      type: 'transaction',
-      title: desc.charAt(0).toUpperCase() + desc.slice(1),
-      amount: amountVal,
-      category,
-      txType: isExplicitIncome ? 'income' : 'expense',
-    };
-  }
+const AMOUNT_AFTER = re(String.raw`([+-]?)(\d+(?:[.,]\d{1,2})?)\s*(?:€|euro?(?![\p{L}]))`);
+const AMOUNT_BEFORE = re(String.raw`(?:€|euro?)\s*([+-]?)(\d+(?:[.,]\d{1,2})?)`);
+const POT_TARGET = re(String.raw`(?:^|\s)(?:in|für|auf|zum|zur)\s+(?:den|das|die|meinen|mein|meine)?\s*(.+)$`);
+const TIME_OF_DAY = re(String.raw`(?:(?<![\p{L}])(?:um|bis)\s+)?(?<![\d:.])([01]?\d|2[0-3])(?::([0-5]\d)(?:\s*uhr)?|\s*uhr)(?![\p{L}\d])`);
+const DURATION = re(String.raw`(?<![\p{L}\d:.,])(\d+(?:[.,]\d+)?)\s*(minuten|min|m|stunden|stunde|std|h)\.?(?![\p{L}\d])`);
+const EXPLICIT_DATE = re(String.raw`(?:(?<![\p{L}])(?:bis|am|zum)\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{2,4})?(?!\d)`, 'u');
 
-  // Otherwise assume it's a Task (Hausaufgabe / Uni / Todo)
-  const lowerText = text.toLowerCase();
-
-  // 1. Detect Subject
-  const knownSubjects = ['mathe', 'mathematik', 'physik', 'informatik', 'info', 'bwl', 'vwl', 'latein', 'deutsch', 'englisch', 'chemie', 'biologie', 'geschichte'];
-  let subjectName: string | undefined;
-  for (const s of knownSubjects) {
-    if (new RegExp(`\\b${s}\\b`, 'i').test(lowerText)) {
-      subjectName = s.charAt(0).toUpperCase() + s.slice(1);
-      if (subjectName === 'Info') subjectName = 'Informatik';
-      break;
-    }
-  }
-
-  // 2. Detect Priority
-  let priority: Priority = 'medium';
-  if (/prio\s*1|dringend|urgent|sofort|wichtig/i.test(lowerText)) {
-    priority = 'urgent';
-  } else if (/prio\s*2|hoch|high/i.test(lowerText)) {
-    priority = 'high';
-  } else if (/prio\s*4|niedrig|low/i.test(lowerText)) {
-    priority = 'low';
-  }
-
-  // 3. Detect Estimated Duration
-  let estimatedMinutes = 30;
-  const timeMatch = text.match(/(\d+)\s*(?:min|m|h|std|stunden)/i);
-  if (timeMatch) {
-    const val = parseInt(timeMatch[1], 10);
-    if (/h|std/i.test(timeMatch[0])) {
-      estimatedMinutes = val * 60;
-    } else {
-      estimatedMinutes = val;
-    }
-  }
-
-  // 4. Detect Due Date
-  const now = new Date();
-  const targetDate = new Date(now);
-  targetDate.setHours(18, 0, 0, 0); // default 18:00
-
-  // Check specific time (e.g. 14:00 or 14 Uhr)
-  const hourMatch = text.match(/(\d{1,2})(?::(\d{2}))?\s*(?:uhr)?/i);
-  if (hourMatch && !text.includes('min')) {
-    const h = parseInt(hourMatch[1], 10);
-    const m = hourMatch[2] ? parseInt(hourMatch[2], 10) : 0;
-    if (h >= 0 && h <= 24) {
-      targetDate.setHours(h, m, 0, 0);
-    }
-  }
-
-  if (lowerText.includes('heute')) {
-    // today
-  } else if (lowerText.includes('morgen')) {
-    targetDate.setDate(targetDate.getDate() + 1);
-  } else if (lowerText.includes('übermorgen')) {
-    targetDate.setDate(targetDate.getDate() + 2);
-  } else {
-    // Days of week: montag, dienstag, mittwoch, donnerstag, freitag, samstag, sonntag
-    const days = ['sonntag', 'montag', 'dienstag', 'mittwoch', 'donnerstag', 'freitag', 'samstag'];
-    for (let i = 0; i < days.length; i++) {
-      if (lowerText.includes(days[i])) {
-        const currentDay = now.getDay();
-        let diff = i - currentDay;
-        if (diff <= 0) diff += 7;
-        targetDate.setDate(now.getDate() + diff);
-        break;
-      }
-    }
-  }
-
-  // Clean title by stripping keywords
-  let cleanTitle = text
-    .replace(/\b(bis\s+(?:heute|morgen|übermorgen|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag))\b/gi, '')
-    .replace(/\b\d{1,2}(?::\d{2})?\s*uhr\b/gi, '')
-    .replace(/\b\d+\s*(?:min|m|std|h)\b/gi, '')
-    .replace(/\bprio\s*[1-4]\b/gi, '')
-    .replace(/\b(dringend|urgent|sofort)\b/gi, '')
+const tidy = (s: string) =>
+  s
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,:;–-]+|[\s,:;–-]+$/g, '')
+    .replace(/\s+(bis|am|um|für|in)$/i, '')
     .trim();
 
-  // Remove leading subject name if duplicate
-  if (subjectName && cleanTitle.toLowerCase().startsWith(subjectName.toLowerCase())) {
-    cleanTitle = cleanTitle.substring(subjectName.length).replace(/^[-:\s]+/, '').trim();
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+export function parseNaturalLanguage(input: string, now: Date = new Date()): ParsedIntent | null {
+  const text = input.trim().replace(/\s+/g, ' ');
+  if (!text) return null;
+  return parseMoney(text) ?? parseTask(text, now);
+}
+
+function parseMoney(text: string): ParsedTransaction | ParsedDeposit | null {
+  const match = text.match(AMOUNT_AFTER) ?? text.match(AMOUNT_BEFORE);
+  if (!match) return null;
+  const amount = Math.abs(parseFloat(match[2].replace(',', '.')));
+  if (!amount) return null;
+
+  let rest = text.replace(match[0], ' ');
+
+  if (word(DEPOSIT_WORDS).test(text)) {
+    rest = rest.replace(word(DEPOSIT_WORDS, 'giu'), ' ');
+    const target = rest.match(POT_TARGET);
+    return { type: 'deposit', amount, potName: tidy(target ? target[1] : rest) };
   }
 
-  if (!cleanTitle) {
-    cleanTitle = subjectName ? `${subjectName} Aufgabe` : "Neue Aufgabe";
+  const isIncome = match[1] === '+' || word(INCOME_WORDS).test(text);
+  const category = isIncome
+    ? 'Einkommen'
+    : CATEGORY_RULES.find(([rule]) => rule.test(text))?.[1] ?? 'Sonstiges';
+
+  const title = tidy(rest.replace(word('ausgabe|einnahme|bezahlt|gekauft|für|fürs', 'giu'), ' '));
+
+  return {
+    type: 'transaction',
+    title: title ? capitalize(title) : isIncome ? 'Einnahme' : 'Ausgabe',
+    amount,
+    category,
+    txType: isIncome ? 'income' : 'expense',
+  };
+}
+
+function parseTask(text: string, now: Date): ParsedTask {
+  let rest = text;
+  const consume = (pattern: RegExp) => {
+    const m = rest.match(pattern);
+    if (m) rest = rest.replace(m[0], ' ');
+    return m;
+  };
+
+  // Priority
+  let priority: Priority = 'medium';
+  if (consume(word(String.raw`prio\s*1|p1|dringend|urgent|sofort|asap`))) priority = 'urgent';
+  else if (consume(word(String.raw`prio\s*2|p2|wichtig|hoch|high`))) priority = 'high';
+  else if (consume(word(String.raw`prio\s*4|p4|niedrig|low|unwichtig`))) priority = 'low';
+  else consume(word(String.raw`prio\s*3|p3`));
+
+  // Time of day: "18:00", "18:00 Uhr", "18 Uhr"
+  let hours: number | null = null;
+  let minutes = 0;
+  const time = consume(TIME_OF_DAY);
+  if (time) {
+    hours = parseInt(time[1], 10);
+    minutes = time[2] ? parseInt(time[2], 10) : 0;
   }
+
+  // Duration: "45min", "1,5h", "2 Std"
+  let estimatedMinutes = 30;
+  const duration = consume(DURATION);
+  if (duration) {
+    const value = parseFloat(duration[1].replace(',', '.'));
+    const isHours = /^(stunde|std|h)/i.test(duration[2]);
+    estimatedMinutes = Math.max(5, Math.round(isHours ? value * 60 : value));
+  }
+
+  // Due date
+  const due = new Date(now);
+  let hasExplicitDay = false;
+
+  const relative = consume(word(String.raw`(?:bis\s+|für\s+|am\s+)?(übermorgen|morgen|heute)`));
+  const explicit = relative ? null : consume(EXPLICIT_DATE);
+  const weekday =
+    relative || explicit
+      ? null
+      : consume(word(String.raw`(?:bis\s+|am\s+|zum\s+|nächsten\s+|nächster\s+)?(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)`)) ??
+        consume(word(String.raw`(?:bis|am|ab|zum)\s+(mo|di|mi|do|fr|sa|so)\.?`));
+
+  if (relative) {
+    const offset = { heute: 0, morgen: 1, übermorgen: 2 }[relative[1].toLowerCase() as 'heute'] ?? 0;
+    due.setDate(due.getDate() + offset);
+    hasExplicitDay = true;
+  } else if (explicit) {
+    const day = parseInt(explicit[1], 10);
+    const month = parseInt(explicit[2], 10);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      let year = explicit[3] ? parseInt(explicit[3], 10) : now.getFullYear();
+      if (year < 100) year += 2000;
+      due.setFullYear(year, month - 1, day);
+      if (!explicit[3] && due < new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
+        due.setFullYear(year + 1);
+      }
+      hasExplicitDay = true;
+    }
+  } else if (weekday) {
+    const target = WEEKDAYS.findIndex((d) => d.startsWith(weekday[1].toLowerCase()));
+    let diff = target - now.getDay();
+    if (diff <= 0) diff += 7;
+    due.setDate(now.getDate() + diff);
+    hasExplicitDay = true;
+  }
+
+  due.setHours(hours ?? 18, hours === null ? 0 : minutes, 0, 0);
+  if (!hasExplicitDay && due < now) due.setDate(due.getDate() + 1);
+
+  // Subject (a leading subject word is removed from the title, it becomes a pill instead)
+  let subjectName: string | undefined;
+  for (const [pattern, canonical] of SUBJECTS) {
+    const m = rest.match(word(pattern));
+    if (!m) continue;
+    subjectName = canonical;
+    if (rest.trimStart().toLowerCase().startsWith(m[0].toLowerCase())) rest = rest.replace(m[0], ' ');
+    break;
+  }
+
+  const title = tidy(rest);
 
   return {
     type: 'task',
-    title: cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1),
+    title: title ? capitalize(title) : subjectName ? `${subjectName} Aufgabe` : 'Neue Aufgabe',
     subjectName,
-    dueDate: targetDate.toISOString(),
+    dueDate: due.toISOString(),
     estimatedMinutes,
     priority,
   };

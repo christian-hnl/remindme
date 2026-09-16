@@ -1,40 +1,25 @@
-version: '3.8'
-
 services:
-  # 1. PostgreSQL Datenbank (Production Storage)
-  db:
-    image: postgres:16-alpine
-    container_name: life_dashboard_db
-    restart: always
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-dashboard_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supersecretpassword123}
-      POSTGRES_DB: ${POSTGRES_DB:-life_dashboard}
-    volumes:
-      - db_data:/var/lib/postgresql/data
-    networks:
-      - dashboard_net
-
-  # 2. Web App (Client & Server Backend)
+  # Web app (Next.js + SQLite, data persisted in the app_data volume)
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: life_dashboard_app
-    restart: always
-    depends_on:
-      - db
+    container_name: lifetracker_app
+    restart: unless-stopped
     environment:
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-dashboard_user}:${POSTGRES_PASSWORD:-supersecretpassword123}@db:5432/${POSTGRES_DB:-life_dashboard}?schema=public"
-      PORT: 3000
+      # Strongly recommended when the dashboard is reachable from the internet.
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+    volumes:
+      - app_data:/app/data
     networks:
       - dashboard_net
 
-  # 3. Caddy Reverse Proxy (Automatisches SSL-Zertifikat)
+  # Caddy reverse proxy with automatic HTTPS
   caddy:
     image: caddy:2-alpine
-    container_name: life_dashboard_proxy
-    restart: always
+    container_name: lifetracker_proxy
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
@@ -50,7 +35,7 @@ services:
       - dashboard_net
 
 volumes:
-  db_data:
+  app_data:
   caddy_data:
   caddy_config:
 

@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Subject, Task, Reminder } from '@/types';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, CheckCircle2, Clock, Bell } from 'lucide-react';
-import { format, isSameDay } from 'date-fns';
+import type { Reminder, Subject, Task } from '@/types';
+import { Bell, ChevronLeft, ChevronRight } from 'lucide-react';
+import { addDays, addWeeks, format, getISOWeek, isSameDay, startOfDay, startOfWeek } from 'date-fns';
 import { de } from 'date-fns/locale';
 
 interface MiniCalendarProps {
@@ -12,7 +12,10 @@ interface MiniCalendarProps {
   onSelectSubject: (id: string | null) => void;
   tasks: Task[];
   reminders?: Reminder[];
+  onEditTask?: (task: Task) => void;
 }
+
+const DAY_NAMES = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
 export const MiniCalendar: React.FC<MiniCalendarProps> = ({
   subjects,
@@ -20,168 +23,142 @@ export const MiniCalendar: React.FC<MiniCalendarProps> = ({
   onSelectSubject,
   tasks,
   reminders = [],
+  onEditTask,
 }) => {
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
+
   const today = new Date();
-  const currentMonthName = today.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+  const weekStart = addWeeks(startOfWeek(today, { weekStartsOn: 1 }), weekOffset);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
-  // Generate days of the current week
-  const daysOfWeek = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
-  const startOfWeek = new Date(today);
-  const day = today.getDay();
-  const diff = today.getDate() - day + (day === 0 ? -6 : 1);
-  startOfWeek.setDate(diff);
+  const scopedTasks = selectedSubjectId ? tasks.filter((t) => t.subjectId === selectedSubjectId) : tasks;
+  const tasksOn = (day: Date) => scopedTasks.filter((t) => isSameDay(new Date(t.dueDate), day));
+  const remindersOn = (day: Date) => reminders.filter((r) => r.dueDate && isSameDay(new Date(r.dueDate), day));
 
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(startOfWeek);
-    d.setDate(startOfWeek.getDate() + i);
-    const isToday = isSameDay(d, today);
-    const isSelected = isSameDay(d, selectedDate);
-    
-    // Check if tasks exist on this date
-    const dayTasks = tasks.filter((t) => t.dueDate && isSameDay(new Date(t.dueDate), d) && t.status !== 'done');
-    const dayReminders = reminders.filter((r) => r.dueDate && isSameDay(new Date(r.dueDate), d) && !r.isDone);
+  const moveWeek = (delta: number) => {
+    setWeekOffset((o) => o + delta);
+    setSelectedDate((d) => addWeeks(d, delta));
+  };
 
-    return {
-      date: d,
-      dayNum: d.getDate(),
-      dayName: daysOfWeek[i],
-      isToday,
-      isSelected,
-      hasTasks: dayTasks.length > 0,
-      tasksCount: dayTasks.length,
-      hasReminders: dayReminders.length > 0,
-    };
-  });
-
-  // Items for selected date
-  const selectedDateTasks = tasks.filter((t) => t.dueDate && isSameDay(new Date(t.dueDate), selectedDate));
-  const selectedDateReminders = reminders.filter((r) => r.dueDate && isSameDay(new Date(r.dueDate), selectedDate));
+  const selectedTasks = tasksOn(selectedDate);
+  const selectedReminders = remindersOn(selectedDate);
 
   return (
-    <div className="rounded-3xl bg-[#11141D] border border-white/[0.06] p-5 shadow-bento glow-card">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            <CalendarIcon className="h-4 w-4" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-white tracking-tight capitalize">
-              {currentMonthName}
-            </h2>
-            <p className="text-[11px] text-muted">Kalender & Termine</p>
-          </div>
+    <section className="card card-pad" aria-label="Kalender">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="eyebrow">Kalender · KW {getISOWeek(weekStart)}</p>
+          <h2 className="card-title mt-1 capitalize">{format(weekStart, 'LLLL yyyy', { locale: de })}</h2>
         </div>
-
-        <div className="flex items-center gap-1 text-muted">
-          <button className="p-1 rounded-lg hover:bg-white/5 hover:text-white transition-colors">
-            <ChevronLeft className="h-4 w-4" />
+        <div className="-mr-2 flex items-center">
+          {weekOffset !== 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setWeekOffset(0);
+                setSelectedDate(startOfDay(new Date()));
+              }}
+              className="btn-ghost h-9 px-2.5 text-[13px]"
+            >
+              Heute
+            </button>
+          )}
+          <button type="button" onClick={() => moveWeek(-1)} className="icon-btn" aria-label="Vorherige Woche">
+            <ChevronLeft className="h-5 w-5" />
           </button>
-          <button className="p-1 rounded-lg hover:bg-white/5 hover:text-white transition-colors">
-            <ChevronRight className="h-4 w-4" />
+          <button type="button" onClick={() => moveWeek(1)} className="icon-btn" aria-label="Nächste Woche">
+            <ChevronRight className="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      {/* Week Grid */}
-      <div className="grid grid-cols-7 gap-1.5 text-center mb-4">
-        {weekDays.map((w, idx) => (
-          <button
-            key={idx}
-            onClick={() => setSelectedDate(w.date)}
-            className={`flex flex-col items-center py-2 px-1 rounded-xl transition-all ${
-              w.isSelected
-                ? 'bg-indigo-600 text-white font-semibold shadow-md shadow-indigo-600/30 ring-2 ring-indigo-400'
-                : w.isToday
-                ? 'bg-white/10 text-white font-medium'
-                : 'text-muted hover:bg-white/5 hover:text-white'
-            }`}
-          >
-            <span className="text-[10px] uppercase font-medium">{w.dayName}</span>
-            <span className="text-xs font-mono mt-0.5">{w.dayNum}</span>
-            
-            {/* Dots */}
-            <div className="flex items-center gap-0.5 mt-1 h-1.5">
-              {w.hasTasks && <span className="h-1 w-1 rounded-full bg-amber-400" />}
-              {w.hasReminders && <span className="h-1 w-1 rounded-full bg-emerald-400" />}
-            </div>
-          </button>
-        ))}
-      </div>
-
-      {/* Selected Date Focus Card */}
-      {(selectedDateTasks.length > 0 || selectedDateReminders.length > 0) && (
-        <div className="mb-4 p-3 rounded-2xl bg-[#161B26] border border-white/5 text-xs space-y-1.5">
-          <div className="font-semibold text-indigo-300 text-[11px] mb-1 flex items-center justify-between">
-            <span>Fokus {format(selectedDate, 'dd. MMMM', { locale: de })}:</span>
-            <span className="font-mono text-[10px] text-muted">{selectedDateTasks.length} Deadlines</span>
-          </div>
-
-          {selectedDateTasks.map((t) => (
-            <div key={t.id} className="flex items-center justify-between text-white truncate">
-              <span className="truncate">• {t.title}</span>
-              <span className="text-[10px] font-mono text-indigo-400 ml-1 flex-shrink-0">
-                {t.estimatedMinutes}m
+      <div className="mt-3 grid grid-cols-7 gap-1 text-center">
+        {days.map((day, idx) => {
+          const openTasks = tasksOn(day).filter((t) => t.status !== 'done').length;
+          const openReminders = remindersOn(day).filter((r) => !r.isDone).length;
+          const isSelected = isSameDay(day, selectedDate);
+          const isToday = isSameDay(day, today);
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => setSelectedDate(day)}
+              aria-pressed={isSelected}
+              aria-label={format(day, 'EEEE, d. MMMM', { locale: de })}
+              className={`flex min-h-[64px] flex-col items-center justify-center rounded-[10px] transition-colors ${
+                isSelected ? 'bg-ink text-sheet' : 'text-ink hover:bg-inset'
+              }`}
+            >
+              <span className={`font-display text-[12px] font-semibold uppercase tracking-wider ${isSelected ? 'text-sheet/70' : 'text-ink-3'}`}>
+                {DAY_NAMES[idx]}
               </span>
-            </div>
-          ))}
+              <span className={`font-display text-[22px] font-bold leading-tight tabular ${isToday && !isSelected ? 'marker' : ''}`}>
+                {day.getDate()}
+              </span>
+              <span className="flex h-1.5 items-center gap-1">
+                {openTasks > 0 && <span className={`h-1.5 w-1.5 rounded-full ${isSelected ? 'bg-sheet' : 'bg-accent'}`} />}
+                {openReminders > 0 && <span className="h-1.5 w-1.5 rounded-full bg-warn" />}
+              </span>
+            </button>
+          );
+        })}
+      </div>
 
-          {selectedDateReminders.map((r) => (
-            <div key={r.id} className="flex items-center gap-1 text-amber-300 truncate text-[11px]">
-              <Bell className="h-2.5 w-2.5 flex-shrink-0" />
-              <span className="truncate">{r.title}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="mt-4 border-t border-line/10 pt-3">
+        <p className="eyebrow">{format(selectedDate, 'EEEE, d. MMMM', { locale: de })}</p>
+        {selectedTasks.length === 0 && selectedReminders.length === 0 ? (
+          <p className="mt-2 text-[14px] text-ink-3">Nichts geplant.</p>
+        ) : (
+          <ul className="mt-2 space-y-1">
+            {selectedTasks.map((t) => (
+              <li key={t.id}>
+                <button
+                  type="button"
+                  onClick={() => onEditTask?.(t)}
+                  className={`flex w-full items-center gap-2 rounded-md py-1 text-left text-[14px] ${
+                    t.status === 'done' ? 'text-ink-3 line-through' : 'text-ink'
+                  }`}
+                >
+                  <span className="h-2 w-2 flex-shrink-0 rounded-[2px]" style={{ backgroundColor: t.subject?.colorHex ?? 'rgb(var(--ink-3))' }} />
+                  <span className="min-w-0 flex-1 truncate font-bold">{t.title}</span>
+                  <span className="font-mono text-[12px] text-ink-3 tabular">{format(new Date(t.dueDate), 'HH:mm')}</span>
+                </button>
+              </li>
+            ))}
+            {selectedReminders.map((r) => (
+              <li key={r.id} className={`flex items-center gap-2 py-1 text-[14px] ${r.isDone ? 'text-ink-3 line-through' : 'text-ink'}`}>
+                <Bell className="h-3.5 w-3.5 flex-shrink-0 text-warn" />
+                <span className="min-w-0 flex-1 truncate">{r.title}</span>
+                {r.dueTime && <span className="font-mono text-[12px] text-ink-3 tabular">{r.dueTime}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
-      {/* Subject Filter Pills */}
-      <div>
-        <div className="text-[11px] font-medium text-muted uppercase tracking-wider mb-2.5">
-          Fächer & WebUntis-Kürzel
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          <button
-            onClick={() => onSelectSubject(null)}
-            className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-all ${
-              selectedSubjectId === null
-                ? 'bg-white/15 text-white border border-white/20'
-                : 'bg-[#161B26] text-muted border border-white/5 hover:text-white'
-            }`}
-          >
-            Alle
-          </button>
-          {subjects.map((s) => {
-            const isSelected = selectedSubjectId === s.id;
-            return (
+      {subjects.length > 0 && (
+        <div className="mt-4 border-t border-line/10 pt-3">
+          <p className="eyebrow">Aufgaben nach Fach filtern</p>
+          <div className="mt-2 flex flex-wrap gap-1">
+            <button type="button" aria-pressed={selectedSubjectId === null} onClick={() => onSelectSubject(null)} className="tab h-8 px-3 text-[13px]">
+              Alle
+            </button>
+            {subjects.map((s) => (
               <button
                 key={s.id}
-                onClick={() => onSelectSubject(isSelected ? null : s.id)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-medium transition-all ${
-                  isSelected
-                    ? 'text-white border shadow-sm'
-                    : 'bg-[#161B26] text-muted hover:text-white border border-white/5'
-                }`}
-                style={
-                  isSelected
-                    ? { backgroundColor: `${s.colorHex}25`, borderColor: s.colorHex, color: s.colorHex }
-                    : undefined
-                }
+                type="button"
+                aria-pressed={selectedSubjectId === s.id}
+                onClick={() => onSelectSubject(selectedSubjectId === s.id ? null : s.id)}
+                className="tab h-8 px-3 text-[13px]"
               >
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: s.colorHex }}
-                />
-                <span>{s.name}</span>
-                {s.untisCode && (
-                  <span className="text-[9px] opacity-60 font-mono">[{s.untisCode}]</span>
-                )}
+                <span className="h-2 w-2 rounded-[2px]" style={{ backgroundColor: s.colorHex }} />
+                {s.name}
               </button>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </section>
   );
 };

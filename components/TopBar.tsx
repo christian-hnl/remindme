@@ -1,33 +1,28 @@
 'use client';
 
-import React from 'react';
-import { WorkspaceMode, WebUntisConfig } from '@/types';
-import { 
-  Command, 
-  Plus, 
-  GraduationCap, 
-  Wallet, 
-  Coffee, 
-  LayoutGrid, 
-  Sparkles,
-  School,
-  Calendar,
-  FileText,
-  Settings
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import type { WorkspaceMode } from '@/types';
+import { CalendarPlus, Plus, Search, Settings } from 'lucide-react';
+import { ThemeToggle } from './ui/ThemeToggle';
+import { MODE_META, MODE_ORDER } from './modes';
 
 interface TopBarProps {
   activeMode: WorkspaceMode;
   setActiveMode: (mode: WorkspaceMode) => void;
   onOpenCommand: () => void;
   onOpenQuickAdd: () => void;
-  onOpenUntisModal: () => void;
   onOpenAppleSyncModal: () => void;
   onOpenSettingsModal: () => void;
-  displayName: string;
-  untisConfig: WebUntisConfig | null;
-  pendingRemindersCount?: number;
   notesCount?: number;
+}
+
+export function Logo() {
+  return (
+    <span className="relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-ink font-display text-[17px] font-bold tracking-tight text-sheet">
+      LT
+      <span className="absolute inset-x-2 bottom-[7px] h-[3px] rounded-full bg-marker" aria-hidden />
+    </span>
+  );
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -35,181 +30,107 @@ export const TopBar: React.FC<TopBarProps> = ({
   setActiveMode,
   onOpenCommand,
   onOpenQuickAdd,
-  onOpenUntisModal,
   onOpenAppleSyncModal,
   onOpenSettingsModal,
-  displayName,
-  untisConfig,
-  pendingRemindersCount = 0,
   notesCount = 0,
 }) => {
+  const [shortcut, setShortcut] = useState('Strg K');
+  useEffect(() => {
+    if (/Mac|iPhone|iPad/.test(navigator.platform)) setShortcut('⌘K');
+  }, []);
+
   return (
-    <header className="sticky top-0 z-30 w-full border-b border-[rgba(255,255,255,0.06)] bg-[#07090E]/80 backdrop-blur-xl">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
-        
-        {/* Brand & Integrations Indicators */}
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-md shadow-indigo-500/20">
-            <Sparkles className="h-4 w-4 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-white tracking-tight">LifeTracker</span>
-              
-              {/* WebUntis live pill */}
+    <header className="sticky top-0 z-30 border-b border-line/10 bg-paper/80 backdrop-blur-md">
+      <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-2 px-3 sm:px-6 lg:h-16 lg:px-8">
+        <button
+          type="button"
+          onClick={() => setActiveMode('all')}
+          className="flex items-center gap-2.5 rounded-[10px] pr-1"
+          aria-label="Zur Heute-Ansicht"
+        >
+          <Logo />
+          <span className="hidden font-display text-[22px] font-bold tracking-tight text-ink sm:inline">LifeTracker</span>
+        </button>
+
+        {/* Current view on phones & tablets (desktop shows the tab bar) */}
+        <span className="truncate font-display text-[20px] font-semibold text-ink-2 lg:hidden">
+          <span className="mx-1.5 text-line/30 sm:mx-2" aria-hidden>
+            /
+          </span>
+          {MODE_META[activeMode].label}
+        </span>
+
+        <nav className="ml-6 hidden h-full items-stretch gap-1 lg:flex" aria-label="Ansichten">
+          {MODE_ORDER.map((mode) => {
+            const { label, shortcut: key } = MODE_META[mode];
+            const active = activeMode === mode;
+            return (
               <button
-                onClick={onOpenUntisModal}
-                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-300 border border-purple-500/20 hover:bg-purple-500/20 transition-colors"
-                title="Klicken für WebUntis Konfiguration"
+                key={mode}
+                type="button"
+                onClick={() => setActiveMode(mode)}
+                aria-current={active ? 'page' : undefined}
+                title={`${label} (${key})`}
+                className={`relative flex items-center gap-1.5 px-3 font-display text-[17px] font-semibold tracking-[0.01em] transition-colors ${
+                  active ? 'text-ink' : 'text-ink-3 hover:text-ink'
+                }`}
               >
-                <School className="h-2.5 w-2.5 text-purple-400" />
-                <span>{untisConfig?.schoolName || 'WebUntis'}</span>
+                {label}
+                {mode === 'notes' && notesCount > 0 && (
+                  <span className="font-mono text-[11px] font-medium text-ink-3">{notesCount}</span>
+                )}
+                {active && <span className="absolute inset-x-2 bottom-0 h-[3px] rounded-t-full bg-accent" aria-hidden />}
               </button>
+            );
+          })}
+        </nav>
 
-              {/* Apple Calendar Sync Pill */}
-              <button
-                onClick={onOpenAppleSyncModal}
-                className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/20 transition-colors"
-                title="Mit Apple Kalender abonnieren"
-              >
-                <Calendar className="h-2.5 w-2.5 text-indigo-400" />
-                <span>Apple Sync</span>
-              </button>
-            </div>
-            <p className="text-[11px] text-muted hidden md:block">
-              WebUntis Stundenplan • Apple Kalender Live-Sync • Notizen & Gedanken
-            </p>
-          </div>
-        </div>
-
-        {/* Mode Switcher Tabs */}
-        <div className="hidden lg:flex items-center gap-1 rounded-2xl bg-[#11141D] p-1 border border-[rgba(255,255,255,0.06)]">
+        <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
+          {/* Wide search field only where there is room next to the tabs (md without tabs, xl with tabs) */}
           <button
-            onClick={() => setActiveMode('all')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-              activeMode === 'all'
-                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
-                : 'text-muted hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <LayoutGrid className="h-3.5 w-3.5" />
-            <span>Dashboard</span>
-          </button>
-
-          <button
-            onClick={() => setActiveMode('notes')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-              activeMode === 'notes'
-                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
-                : 'text-muted hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <FileText className="h-3.5 w-3.5 text-indigo-300" />
-            <span>Notizen</span>
-            {notesCount > 0 && (
-              <span className="px-1 py-0.2 rounded-full text-[10px] bg-white/20 text-white font-mono">
-                {notesCount}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveMode('study')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-              activeMode === 'study'
-                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
-                : 'text-muted hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <GraduationCap className="h-3.5 w-3.5 text-indigo-300" />
-            <span>Study</span>
-          </button>
-
-          <button
-            onClick={() => setActiveMode('wealth')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-              activeMode === 'wealth'
-                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30'
-                : 'text-muted hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Wallet className="h-3.5 w-3.5 text-emerald-300" />
-            <span>Geld</span>
-          </button>
-
-          <button
-            onClick={() => setActiveMode('weekend')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
-              activeMode === 'weekend'
-                ? 'bg-purple-600 text-white shadow-sm shadow-purple-600/30'
-                : 'text-muted hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Coffee className="h-3.5 w-3.5 text-purple-300" />
-            <span>Weekend</span>
-          </button>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2">
-          {/* Apple Sync Button for Mobile/Tablet */}
-          <button
-            onClick={onOpenAppleSyncModal}
-            className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#11141D] border border-white/[0.07] text-xs text-muted hover:text-white hover:border-indigo-500/30 transition-colors"
-            title="Apple Kalender Live-Sync"
-          >
-            <Calendar className="h-3.5 w-3.5 text-indigo-400" />
-            <span>Apple Sync</span>
-          </button>
-
-          {/* Global Search Button */}
-          <button
-            id="command-palette-trigger"
+            type="button"
             onClick={onOpenCommand}
-            className="group flex items-center gap-2 rounded-xl bg-[#11141D] px-3 py-1.5 text-xs text-muted border border-[rgba(255,255,255,0.06)] hover:border-indigo-500/40 hover:text-white transition-all shadow-sm"
+            className="mr-1 hidden h-10 w-60 flex-shrink-0 items-center gap-2 whitespace-nowrap rounded-[10px] border border-line/15 bg-sheet px-3 text-[14px] text-ink-3 transition-colors hover:border-line/30 md:flex lg:hidden xl:flex xl:w-72"
           >
-            <Command className="h-3.5 w-3.5 text-indigo-400 group-hover:scale-110 transition-transform" />
-            <span className="hidden sm:inline">Suchen...</span>
-            <kbd className="hidden sm:inline-flex items-center gap-0.5 rounded bg-[#1A1F2C] px-1.5 py-0.5 text-[10px] font-mono text-muted group-hover:text-white border border-white/5">
-              ⌘K
+            <Search className="h-4 w-4 flex-shrink-0" />
+            <span>Suchen oder eintragen…</span>
+            <kbd className="ml-auto rounded border border-line/15 bg-inset px-1.5 py-0.5 font-mono text-[11px] text-ink-3">
+              {shortcut}
             </kbd>
           </button>
-
-          {/* Quick Add Button */}
           <button
-            id="quick-add-btn"
+            type="button"
+            onClick={onOpenCommand}
+            className="icon-btn md:hidden lg:inline-flex xl:hidden"
+            aria-label="Suchen oder eintragen"
+            title={`Suchen oder eintragen (${shortcut})`}
+          >
+            <Search className="h-[19px] w-[19px]" />
+          </button>
+          <button
+            type="button"
+            onClick={onOpenAppleSyncModal}
+            className="icon-btn hidden sm:inline-flex lg:hidden xl:inline-flex"
+            aria-label="Kalender abonnieren"
+            title="Kalender abonnieren"
+          >
+            <CalendarPlus className="h-[19px] w-[19px]" />
+          </button>
+          <ThemeToggle />
+          <button type="button" onClick={onOpenSettingsModal} className="icon-btn" aria-label="Einstellungen" title="Einstellungen (S)">
+            <Settings className="h-[19px] w-[19px]" />
+          </button>
+          <button
+            type="button"
             onClick={onOpenQuickAdd}
-            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm shadow-indigo-600/30 hover:bg-indigo-500 active:scale-95 transition-all"
+            className="btn-primary ml-2 hidden w-10 px-0 lg:inline-flex xl:w-auto xl:px-4"
+            title="Neu anlegen (N)"
+            aria-label="Neu anlegen"
           >
-            <Plus className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Neu</span>
-            <kbd className="hidden md:inline text-[10px] opacity-75 font-mono">Q</kbd>
+            <Plus className="h-4 w-4" strokeWidth={2.5} />
+            <span className="hidden xl:inline">Neu</span>
           </button>
-
-          {/* Settings Hub Button */}
-          <button
-            id="settings-hub-btn"
-            onClick={onOpenSettingsModal}
-            className="group flex items-center gap-1.5 rounded-xl bg-[#11141D] px-2.5 py-1.5 text-xs text-muted border border-[rgba(255,255,255,0.06)] hover:border-purple-500/40 hover:text-white transition-all shadow-sm"
-            title="Einstellungen & Integrationen (WebUntis, Apple, Budget)"
-          >
-            <Settings className="h-3.5 w-3.5 text-purple-400 group-hover:rotate-45 transition-transform duration-300" />
-            <span className="hidden sm:inline font-medium">Einstellungen</span>
-            <kbd className="hidden md:inline text-[10px] opacity-60 font-mono">S</kbd>
-          </button>
-
-          {/* User Status / Avatar */}
-          <div className="flex items-center gap-2 pl-1">
-            <div 
-              onClick={onOpenSettingsModal}
-              className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#1A1F2C] border border-white/10 text-xs font-semibold text-indigo-300 hover:border-purple-500/40 cursor-pointer transition-colors"
-              title="Profil & Einstellungen"
-            >
-              {displayName.charAt(0)}
-            </div>
-          </div>
         </div>
-
       </div>
     </header>
   );

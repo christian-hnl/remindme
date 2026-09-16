@@ -2,102 +2,249 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   Themes
+   Light  "Rechenpapier": grid paper, Königsblau ink, highlighter & red pen.
+   Dark   "Blaupause":    blueprint blue with pale drafting lines.
+   Values are RGB channels so Tailwind opacity modifiers keep working.
+--------------------------------------------------------------------------- */
 :root {
-  --canvas: #07090E;
-  --card: #11141D;
-  --card-hover: #161B26;
-  --elevated: #1A1F2C;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-glow: rgba(99, 102, 241, 0.35);
-  --muted: #64748B;
-  --main: #F8FAFC;
+  color-scheme: light;
+  --paper: 235 239 244;
+  --sheet: 255 255 255;
+  --inset: 243 245 249;
+  --ink: 21 29 51;
+  --ink-2: 78 90 116;
+  --ink-3: 124 136 160;
+  --line: 21 29 51;
+  --accent: 42 75 220;
+  --on-accent: 255 255 255;
+  --marker: 255 219 46;
+  --on-marker: 40 32 0;
+  --marker-strength: 0.85;
+  --pen: 208 44 62;
+  --leaf: 14 130 88;
+  --warn: 184 108 0;
+  --grid-line: rgba(42, 75, 220, 0.07);
+  --shadow: 0 1px 0 rgba(21, 29, 51, 0.04), 0 12px 28px -20px rgba(21, 29, 51, 0.38);
+  --shadow-lift: 0 28px 60px -24px rgba(21, 29, 51, 0.45);
 }
 
-* {
-  box-sizing: border-box;
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --paper: 11 24 44;
+  --sheet: 17 34 60;
+  --inset: 10 22 41;
+  --ink: 232 239 250;
+  --ink-2: 160 179 208;
+  --ink-3: 112 133 166;
+  --line: 164 194 240;
+  --accent: 134 162 255;
+  --on-accent: 7 17 36;
+  --marker: 255 224 82;
+  --on-marker: 40 32 0;
+  --marker-strength: 0.34;
+  --pen: 255 116 116;
+  --leaf: 70 212 146;
+  --warn: 255 188 84;
+  --grid-line: rgba(164, 194, 240, 0.055);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.25), 0 16px 36px -22px rgba(0, 0, 0, 0.85);
+  --shadow-lift: 0 30px 70px -24px rgba(0, 0, 0, 0.85);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background-color: #07090E;
-  color: #F8FAFC;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: rgb(var(--paper));
+  color: rgb(var(--ink));
+  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-attachment: fixed;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* Custom Scrollbar */
+::selection {
+  background: rgb(var(--marker) / 0.55);
+  color: rgb(var(--ink));
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #07090E;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgb(var(--line) / 0.18);
   border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background-color: rgb(var(--line) / 0.3);
 }
 
-/* Glassmorphism & Bento Utilities */
-.glass-panel {
-  background: rgba(17, 20, 29, 0.75);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
-.glass-elevated {
-  background: rgba(26, 31, 44, 0.88);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+/* ---------------------------------------------------------------------------
+   Signature marks
+--------------------------------------------------------------------------- */
+
+/* Highlighter swipe behind the lower part of a word – marks "now" and "today". */
+.marker {
+  background-image: linear-gradient(
+    100deg,
+    transparent 0.2em,
+    rgb(var(--marker) / var(--marker-strength)) 0.32em,
+    rgb(var(--marker) / var(--marker-strength)) calc(100% - 0.18em),
+    transparent 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 0.52em;
+  background-position: 0 86%;
+  padding-inline: 0.12em;
+  margin-inline: -0.12em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
-.glass-dock {
-  background: rgba(17, 20, 29, 0.85);
-  backdrop-filter: blur(32px);
-  -webkit-backdrop-filter: blur(32px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.75);
+/* Teacher's red pen: overdue is corrected, not just coloured. */
+.pen-mark {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: rgb(var(--pen));
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
 }
 
-/* Subtle glow card */
-.glow-card {
-  position: relative;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+/* Cancelled lessons are crossed out with diagonal red hatching. */
+.hatch {
+  background-image: repeating-linear-gradient(135deg, rgb(var(--pen) / 0.14) 0 5px, transparent 5px 11px);
 }
 
-.glow-card:hover {
-  border-color: rgba(99, 102, 241, 0.35);
-  box-shadow: 0 0 25px -4px rgba(99, 102, 241, 0.15);
+/* Ruled exercise-book lines for the note editor. */
+.ruled {
+  line-height: 1.75rem;
+  background-image: linear-gradient(transparent calc(1.75rem - 1px), rgb(var(--accent) / 0.13) calc(1.75rem - 1px));
+  background-size: 100% 1.75rem;
+  background-attachment: local;
 }
 
-.glow-card-mint:hover {
-  border-color: rgba(16, 185, 129, 0.35);
-  box-shadow: 0 0 25px -4px rgba(16, 185, 129, 0.18);
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
-.glow-card-amber:hover {
-  border-color: rgba(245, 158, 11, 0.35);
-  box-shadow: 0 0 25px -4px rgba(245, 158, 11, 0.18);
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* Smooth transitions */
-.transition-smooth {
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+/* Enter animations */
+@keyframes lt-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes lt-slide-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes lt-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-in {
+  animation: lt-fade-in 0.18s ease-out both;
+}
+.animate-in.slide-up {
+  animation: lt-slide-up 0.24s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.rise {
+  animation: lt-rise 0.35s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .animate-in.slide-up,
+  .rise {
+    animation: none;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
 }
 
-/* Linear-like micro-border badge */
-.micro-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 500;
-  border-radius: 9999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+/* ---------------------------------------------------------------------------
+   Components
+--------------------------------------------------------------------------- */
+@layer components {
+  .card {
+    @apply rounded-[14px] border border-line/10 bg-sheet shadow-sheet;
+  }
+  .card-pad {
+    @apply p-4 sm:p-5;
+  }
+  .card-title {
+    @apply font-display text-[22px] font-semibold leading-none tracking-[0.005em] text-ink;
+  }
+  .eyebrow {
+    @apply font-display text-[12px] font-semibold uppercase tracking-[0.14em] text-ink-3;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-line/10 bg-inset px-1.5 py-0.5 text-[11px] font-bold leading-none text-ink-2;
+  }
+  .icon-btn {
+    @apply inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-[10px] text-ink-2 transition-colors hover:bg-inset hover:text-ink disabled:opacity-40;
+  }
+  .field-label {
+    @apply mb-1.5 block font-display text-[12px] font-semibold uppercase tracking-[0.12em] text-ink-3;
+  }
+  .field-input {
+    @apply w-full rounded-[10px] border border-line/15 bg-inset px-3 py-2.5 text-[15px] text-ink transition-colors placeholder:text-ink-3 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20;
+  }
+  .btn {
+    @apply inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-[10px] px-4 text-[14px] font-bold transition-all active:scale-[0.97] disabled:pointer-events-none disabled:opacity-45;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-on-accent shadow-sm hover:brightness-110;
+  }
+  .btn-secondary {
+    @apply btn border border-line/15 bg-sheet text-ink hover:border-line/30 hover:bg-inset;
+  }
+  .btn-ghost {
+    @apply btn text-ink-2 hover:bg-inset hover:text-ink;
+  }
+  .btn-danger {
+    @apply btn border border-pen/30 text-pen hover:bg-pen/10;
+  }
+  .tab {
+    @apply inline-flex h-9 flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-transparent px-3.5 text-[14px] font-bold text-ink-2 transition-colors hover:bg-inset hover:text-ink;
+  }
+  .tab[aria-selected='true'],
+  .tab[aria-pressed='true'] {
+    @apply border-ink bg-ink text-sheet hover:bg-ink hover:text-sheet;
+  }
+  .segmented {
+    @apply grid gap-1 rounded-[12px] border border-line/10 bg-inset p-1;
+  }
+  .segmented-item {
+    @apply flex min-h-[38px] items-center justify-center gap-1.5 rounded-[9px] px-2 text-[14px] font-bold text-ink-2 transition-all hover:text-ink;
+  }
+  .segmented-item[aria-pressed='true'] {
+    @apply bg-sheet text-ink shadow-sheet;
+  }
 }

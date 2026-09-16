@@ -1,45 +1,38 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
+import { jsonError, readJson, serverError, toNumber } from '@/lib/api';
 
-export async function POST(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+type Params = { params: { id: string } };
+
+/** Moves money into a pot (`direction: "deposit"`, default) or back out of it (`"withdraw"`). */
+export async function POST(req: Request, { params }: Params) {
   try {
-    const { id } = params;
-    const body = await req.json();
-    const amount = parseFloat(body.amount);
+    const body = await readJson(req);
+    const amount = toNumber(body.amount);
+    const withdraw = body.direction === 'withdraw';
+    if (amount === null || amount <= 0) return jsonError('Bitte einen positiven Betrag angeben');
 
-    if (isNaN(amount) || amount <= 0) {
-      return NextResponse.json({ error: 'Valid positive amount is required' }, { status: 400 });
+    const user = await getCurrentUser();
+    const pot = await db.savingsPot.findFirst({ where: { id: params.id, userId: user.id } });
+    if (!pot) return jsonError('Spartopf nicht gefunden', 404);
+    if (withdraw && amount > pot.currentAmount + 0.001) {
+      return jsonError(`Im Spartopf sind nur ${pot.currentAmount.toFixed(2)} € verfügbar`);
     }
 
-    const pot = await db.savingsPot.findUnique({
-      where: { id },
-    });
-
-    if (!pot) {
-      return NextResponse.json({ error: 'Savings pot not found' }, { status: 404 });
-    }
-
-    const newAmount = pot.currentAmount + amount;
-
-    // Transaction & Pot Update in a single transaction
     const [updatedPot, transaction] = await db.$transaction([
       db.savingsPot.update({
-        where: { id },
-        data: { currentAmount: newAmount },
+        where: { id: pot.id },
+        data: { currentAmount: withdraw ? { decrement: amount } : { increment: amount } },
       }),
       db.transaction.create({
         data: {
-          userId: pot.userId,
+          userId: user.id,
           savingsPotId: pot.id,
-          title: `Einzahlung: ${pot.name}`,
-          amount: -amount,
+          title: `${withdraw ? 'Entnahme' : 'Einzahlung'}: ${pot.name}`,
+          amount: withdraw ? amount : -amount,
           category: 'Sparen',
-          type: 'transfer_to_pot',
-          isRecurring: false,
-          transactionDate: new Date(),
+          type: withdraw ? 'transfer_from_pot' : 'transfer_to_pot',
         },
       }),
     ]);
@@ -48,10 +41,9 @@ export async function POST(
       success: true,
       pot: updatedPot,
       transaction,
-      isGoalReached: updatedPot.currentAmount >= updatedPot.targetAmount,
+      isGoalReached: !withdraw && pot.currentAmount < pot.targetAmount && updatedPot.currentAmount >= updatedPot.targetAmount,
     });
   } catch (error) {
-    console.error('Error depositing to savings pot:', error);
-    return NextResponse.json({ error: 'Failed to process deposit' }, { status: 500 });
+    return serverError('POST /savings-pots/[id]/deposit', error, 'Buchung fehlgeschlagen');
   }
 }

@@ -1,45 +1,39 @@
 import { NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
+import { cleanString, jsonError, readJson, serverError } from '@/lib/api';
 
-export async function PATCH(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+type Params = { params: { id: string } };
+
+export async function PATCH(req: Request, { params }: Params) {
   try {
-    const { id } = params;
-    const body = await req.json();
+    const user = await getCurrentUser();
+    const note = await db.note.findFirst({ where: { id: params.id, userId: user.id } });
+    if (!note) return jsonError('Notiz nicht gefunden', 404);
 
-    const note = await db.note.update({
-      where: { id },
-      data: {
-        ...(body.title !== undefined && { title: body.title }),
-        ...(body.content !== undefined && { content: body.content }),
-        ...(body.category !== undefined && { category: body.category }),
-        ...(body.isPinned !== undefined && { isPinned: body.isPinned }),
-        ...(body.colorHex !== undefined && { colorHex: body.colorHex }),
-      },
-    });
+    const body = await readJson(req);
+    const data: Prisma.NoteUpdateInput = {};
+    if (body.title !== undefined) data.title = cleanString(body.title, 200) ?? '';
+    if (typeof body.content === 'string') data.content = body.content.slice(0, 100_000);
+    if (body.category !== undefined) data.category = cleanString(body.category, 40) || 'Gedanken';
+    if (body.isPinned !== undefined) data.isPinned = !!body.isPinned;
+    if (body.colorHex !== undefined) data.colorHex = cleanString(body.colorHex, 9) || note.colorHex;
 
-    return NextResponse.json(note);
+    const updated = await db.note.update({ where: { id: note.id }, data });
+    return NextResponse.json(updated);
   } catch (error) {
-    console.error('Error updating note:', error);
-    return NextResponse.json({ error: 'Failed to update note' }, { status: 500 });
+    return serverError('PATCH /notes/[id]', error, 'Notiz konnte nicht gespeichert werden');
   }
 }
 
-export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(_req: Request, { params }: Params) {
   try {
-    const { id } = params;
-    await db.note.delete({
-      where: { id },
-    });
-
-    return NextResponse.json({ success: true, id });
+    const user = await getCurrentUser();
+    const { count } = await db.note.deleteMany({ where: { id: params.id, userId: user.id } });
+    if (!count) return jsonError('Notiz nicht gefunden', 404);
+    return NextResponse.json({ success: true, id: params.id });
   } catch (error) {
-    console.error('Error deleting note:', error);
-    return NextResponse.json({ error: 'Failed to delete note' }, { status: 500 });
+    return serverError('DELETE /notes/[id]', error, 'Notiz konnte nicht gelöscht werden');
   }
 }

@@ -1,110 +1,83 @@
 'use client';
 
 import React from 'react';
-import { Sparkles, TrendingUp, ShieldCheck, Wallet, ArrowUpRight } from 'lucide-react';
+import { SlidersHorizontal } from 'lucide-react';
+import { formatEuro } from '@/lib/format';
 
 interface SafeToSpendDialProps {
   safeToSpendDaily: number;
+  dailyBudgetBaseline: number;
   totalBalance: number;
-  freeAvailable: number;
+  freeThisMonth: number;
+  monthlyBudget: number;
+  onOpenSettings: () => void;
 }
 
+/** Daily budget overview for the "Geld" view. */
 export const SafeToSpendDial: React.FC<SafeToSpendDialProps> = ({
   safeToSpendDaily,
+  dailyBudgetBaseline,
   totalBalance,
-  freeAvailable,
+  freeThisMonth,
+  monthlyBudget,
+  onOpenSettings,
 }) => {
-  // Max safe daily reference for circular meter visual (e.g. 50€)
-  const maxDial = 50;
-  const dialPercentage = Math.min(100, Math.max(0, (safeToSpendDaily / maxDial) * 100));
-  const strokeDashoffset = 251.2 - (251.2 * dialPercentage) / 100;
+  const ratio = dailyBudgetBaseline > 0 ? Math.min(1, safeToSpendDaily / dailyBudgetBaseline) : 0;
+  const exhausted = safeToSpendDaily <= 0;
+  const [euros, cents] = safeToSpendDaily.toFixed(2).split('.');
 
   return (
-    <div className="rounded-3xl bg-[#11141D] border border-white/[0.06] p-5 sm:p-6 shadow-bento glow-card-mint relative overflow-hidden">
-      {/* Background Ambient Radial Glow */}
-      <div className="absolute -right-12 -top-12 h-36 w-36 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
-
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <Sparkles className="h-4 w-4" />
-          </div>
-          <div>
-            <h3 className="text-sm font-semibold text-white tracking-tight">Safe-to-Spend Dial</h3>
-            <p className="text-[11px] text-muted">Dynamisches Tages-Restbudget</p>
-          </div>
-        </div>
-
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-          <ShieldCheck className="h-3 w-3" />
-          Aktiv
-        </span>
-      </div>
-
-      {/* Hero Dial Container */}
-      <div className="flex items-center justify-between py-2 px-1">
+    <section className="card card-pad" aria-label="Tagesbudget">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] font-semibold text-muted uppercase tracking-wider mb-1">
-            Heute noch frei verfügbar
-          </div>
-          <div className="font-mono text-3xl sm:text-4xl font-bold text-white tracking-tight flex items-baseline gap-1">
-            <span>{safeToSpendDaily.toFixed(2)}</span>
-            <span className="text-emerald-400 text-2xl font-normal">€</span>
-          </div>
-          <p className="text-xs text-muted mt-1.5 max-w-[210px] leading-relaxed">
-            Bleibst du heute darunter, erhöht sich automatisch dein Budget fürs Wochenende!
-          </p>
+          <p className="eyebrow">Tagesbudget</p>
+          <h2 className="card-title mt-1">Heute frei</h2>
         </div>
-
-        {/* Circular Progress Meter (Apple Watch & Copilot Style) */}
-        <div className="relative flex items-center justify-center flex-shrink-0">
-          <svg className="w-24 h-24 transform -rotate-90">
-            <circle
-              cx="48"
-              cy="48"
-              r="40"
-              stroke="rgba(255,255,255,0.06)"
-              strokeWidth="7"
-              fill="transparent"
-            />
-            <circle
-              cx="48"
-              cy="48"
-              r="40"
-              stroke="#10B981"
-              strokeWidth="7"
-              strokeDasharray={251.2}
-              strokeDashoffset={strokeDashoffset}
-              strokeLinecap="round"
-              fill="transparent"
-              className="transition-all duration-1000 ease-out"
-            />
-          </svg>
-          <div className="absolute flex flex-col items-center">
-            <span className="text-xs font-mono font-bold text-emerald-400">
-              {Math.round(dialPercentage)}%
-            </span>
-            <span className="text-[9px] uppercase font-semibold text-muted">Puffer</span>
-          </div>
-        </div>
+        <button type="button" onClick={onOpenSettings} className="icon-btn -mr-2" aria-label="Monatsbudget ändern" title="Monatsbudget ändern">
+          <SlidersHorizontal className="h-[18px] w-[18px]" />
+        </button>
       </div>
 
-      {/* Bottom Balance Strip */}
-      <div className="mt-5 grid grid-cols-2 gap-2 pt-4 border-t border-white/[0.06]">
-        <div className="rounded-2xl bg-[#161B26] p-2.5 border border-white/5">
-          <div className="text-[11px] text-muted">Gesamter Kontostand</div>
-          <div className="font-mono text-sm font-semibold text-white mt-0.5">
-            {totalBalance.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €
-          </div>
-        </div>
-        <div className="rounded-2xl bg-[#161B26] p-2.5 border border-white/5">
-          <div className="text-[11px] text-muted">Monatlich frei</div>
-          <div className="font-mono text-sm font-semibold text-emerald-400 mt-0.5">
-            {freeAvailable.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €
-          </div>
-        </div>
+      <p className={`mt-3 font-display font-bold leading-none tabular ${exhausted ? 'text-pen' : 'text-ink'}`}>
+        <span className="text-[68px]">{Number(euros).toLocaleString('de-DE')}</span>
+        <span className="text-[38px]">,{cents}</span>
+        <span className="ml-1.5 text-[34px] text-ink-3">€</span>
+      </p>
+
+      <div
+        className="mt-4 h-2.5 overflow-hidden rounded-full bg-inset"
+        role="meter"
+        aria-valuenow={Math.round(ratio * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Anteil am durchschnittlichen Tagesbudget"
+      >
+        <div
+          className={`h-full rounded-full transition-[width] duration-700 ${exhausted ? 'bg-pen' : ratio < 0.5 ? 'bg-warn' : 'bg-leaf'}`}
+          style={{ width: `${exhausted ? 100 : Math.max(2, ratio * 100)}%` }}
+        />
       </div>
-    </div>
+
+      <p className="mt-3 text-[14px] leading-relaxed text-ink-2">
+        {exhausted
+          ? 'Für heute ist das Budget aufgebraucht. Morgen wird der Rest des Monats neu verteilt.'
+          : `Dein Monatsbudget von ${formatEuro(monthlyBudget, 0)} wird auf die restlichen Tage verteilt. Was du heute nicht ausgibst, bleibt für die nächsten Tage.`}
+      </p>
+
+      <dl className="mt-4 grid grid-cols-3 gap-px overflow-hidden rounded-[10px] border border-line/10 bg-line/10">
+        {[
+          ['Kontostand', formatEuro(totalBalance), totalBalance < 0],
+          ['Monat frei', formatEuro(freeThisMonth), false],
+          ['Ø pro Tag', formatEuro(dailyBudgetBaseline), false],
+        ].map(([label, value, negative]) => (
+          <div key={label as string} className="min-w-0 bg-sheet px-2.5 py-2.5 sm:px-3">
+            <dt className="eyebrow truncate text-[11px]">{label}</dt>
+            <dd className={`mt-0.5 whitespace-nowrap font-mono text-[12.5px] font-medium tabular sm:text-[14px] ${negative ? 'text-pen' : 'text-ink'}`}>
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 };

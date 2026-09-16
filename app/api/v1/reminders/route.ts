@@ -1,72 +1,56 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
+import { REPEAT_PATTERNS, cleanString, jsonError, pickEnum, readJson, serverError, toDate } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export async function GET() {
   try {
-    const user = await db.user.findFirst();
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
-
+    const user = await getCurrentUser();
     const reminders = await db.reminder.findMany({
       where: { userId: user.id },
-      orderBy: [
-        { isDone: 'asc' },
-        { dueDate: 'asc' },
-      ],
+      orderBy: [{ isDone: 'asc' }, { createdAt: 'desc' }],
     });
-
     return NextResponse.json(reminders);
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch reminders' }, { status: 500 });
+    return serverError('GET /reminders', error);
   }
 }
 
 export async function POST(req: Request) {
   try {
-    const user = await db.user.findFirst();
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    const body = await readJson(req);
+    const title = cleanString(body.title, 200);
+    if (!title) return jsonError('Titel ist erforderlich');
 
-    const body = await req.json();
-    const { 
-      title, 
-      category, 
-      hasDueDate, 
-      dueTime, 
-      dueDate, 
-      personName, 
-      reminderType, 
-      icon, 
-      priority, 
-      repeatPattern 
-    } = body;
+    const personName = cleanString(body.personName, 60) || null;
+    const hasDueDate = body.hasDueDate !== undefined ? !!body.hasDueDate : true;
+    const dueDate = hasDueDate ? toDate(body.dueDate) ?? new Date() : null;
+    if (dueDate) dueDate.setHours(0, 0, 0, 0);
+    const dueTime = hasDueDate && typeof body.dueTime === 'string' && TIME_PATTERN.test(body.dueTime) ? body.dueTime : null;
 
-    if (!title) {
-      return NextResponse.json({ error: 'Title is required' }, { status: 400 });
-    }
-
-    const isDue = hasDueDate !== undefined ? !!hasDueDate : true;
-
+    const user = await getCurrentUser();
     const reminder = await db.reminder.create({
       data: {
         userId: user.id,
-        title: title.trim(),
-        category: category || (personName ? 'Person' : 'Haushalt'),
-        hasDueDate: isDue,
-        dueDate: isDue && dueDate ? new Date(dueDate) : isDue ? new Date() : null,
-        dueTime: isDue ? (dueTime || null) : null,
-        personName: personName ? personName.trim() : null,
-        reminderType: reminderType || (personName ? 'say_to_person' : 'todo'),
-        icon: icon || (personName ? 'user' : 'bell'),
-        priority: priority || 'medium',
-        repeatPattern: repeatPattern || 'none',
-        isDone: false,
+        title,
+        category: cleanString(body.category, 40) || (personName ? 'Person' : 'Haushalt'),
+        hasDueDate,
+        dueDate,
+        dueTime,
+        personName,
+        reminderType: cleanString(body.reminderType, 20) || (personName ? 'say_to_person' : 'todo'),
+        icon: cleanString(body.icon, 30) || (personName ? 'user' : 'bell'),
+        priority: pickEnum(body.priority, ['low', 'medium', 'high'] as const) ?? 'medium',
+        repeatPattern: hasDueDate ? pickEnum(body.repeatPattern, REPEAT_PATTERNS) ?? 'none' : 'none',
       },
     });
 
     return NextResponse.json(reminder, { status: 201 });
   } catch (error) {
-    console.error('Error creating reminder:', error);
-    return NextResponse.json({ error: 'Failed to create reminder' }, { status: 500 });
+    return serverError('POST /reminders', error, 'Erinnerung konnte nicht erstellt werden');
   }
 }

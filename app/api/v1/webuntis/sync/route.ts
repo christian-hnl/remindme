@@ -1,16 +1,16 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
 import { syncWebUntisData } from '@/lib/webuntis';
+import { jsonError } from '@/lib/api';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST() {
   try {
-    const user = await db.user.findFirst();
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
-
-    const result = await syncWebUntisData(user.id);
-    return NextResponse.json(result);
+    const user = await getCurrentUser();
+    return NextResponse.json(await syncWebUntisData(user.id));
   } catch (error) {
     console.error('WebUntis sync error:', error);
-    return NextResponse.json({ error: 'Sync failed' }, { status: 500 });
+    return jsonError(error instanceof Error ? error.message : 'Synchronisation fehlgeschlagen', 502);
   }
 }

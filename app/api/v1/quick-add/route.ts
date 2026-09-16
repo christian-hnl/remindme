@@ -1,58 +1,33 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
+import { createTask } from '@/lib/tasks';
 import { parseNaturalLanguage } from '@/lib/nlp-parser';
+import { jsonError, readJson, serverError } from '@/lib/api';
+
+const PRIORITY_LABELS: Record<string, string> = { urgent: 'Prio 1', high: 'Prio 2', medium: 'Prio 3', low: 'Prio 4' };
 
 export async function POST(req: Request) {
   try {
-    const { input } = await req.json();
-    if (!input || typeof input !== 'string') {
-      return NextResponse.json({ error: 'Input string is required' }, { status: 400 });
-    }
+    const { input } = await readJson(req);
+    if (!input || typeof input !== 'string') return jsonError('Bitte einen Befehl eingeben');
 
     const intent = parseNaturalLanguage(input);
-    if (!intent) {
-      return NextResponse.json({ error: 'Could not parse input' }, { status: 400 });
-    }
+    if (!intent) return jsonError('Eingabe konnte nicht interpretiert werden');
 
-    const user = await db.user.findFirst();
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
+    const user = await getCurrentUser();
 
     if (intent.type === 'task') {
-      let subjectId: string | null = null;
-      if (intent.subjectName) {
-        let subj = await db.subject.findFirst({
-          where: { name: { equals: intent.subjectName } },
-        });
-        if (!subj) {
-          subj = await db.subject.create({
-            data: {
-              userId: user.id,
-              name: intent.subjectName,
-              colorHex: '#6366F1',
-            },
-          });
-        }
-        subjectId = subj.id;
-      }
-
-      const task = await db.task.create({
-        data: {
-          userId: user.id,
-          subjectId,
-          title: intent.title,
-          dueDate: new Date(intent.dueDate),
-          estimatedMinutes: intent.estimatedMinutes,
-          priority: intent.priority,
-          status: 'backlog',
-        },
-        include: { subject: true },
+      const task = await createTask(user.id, {
+        title: intent.title,
+        dueDate: new Date(intent.dueDate),
+        estimatedMinutes: intent.estimatedMinutes,
+        priority: intent.priority,
+        subjectName: intent.subjectName,
       });
-
       return NextResponse.json({
         type: 'task',
-        message: `Aufgabe "${task.title}" angelegt (${task.estimatedMinutes}m, Prio: ${task.priority})`,
+        message: `Aufgabe „${task.title}“ angelegt (${task.estimatedMinutes} min, ${PRIORITY_LABELS[task.priority]})`,
         data: task,
       });
     }
@@ -62,61 +37,56 @@ export async function POST(req: Request) {
         data: {
           userId: user.id,
           title: intent.title,
-          amount: intent.txType === 'expense' ? -Math.abs(intent.amount) : Math.abs(intent.amount),
+          amount: intent.txType === 'expense' ? -intent.amount : intent.amount,
           category: intent.category,
           type: intent.txType,
-          isRecurring: false,
-          transactionDate: new Date(),
         },
       });
-
       return NextResponse.json({
         type: 'transaction',
-        message: `${intent.txType === 'income' ? 'Einnahme' : 'Ausgabe'} "${tx.title}" (${Math.abs(tx.amount).toFixed(2)} €) erfasst`,
+        message: `${intent.txType === 'income' ? 'Einnahme' : 'Ausgabe'} „${tx.title}“ (${intent.amount.toFixed(2)} €) erfasst`,
         data: tx,
       });
     }
 
-    if (intent.type === 'deposit') {
-      // Find pot by name or fallback to first pot
-      const pots = await db.savingsPot.findMany({ where: { userId: user.id, isArchived: false } });
-      const targetPot =
-        pots.find((p) => p.name.toLowerCase().includes(intent.potName.toLowerCase())) ||
-        pots[0];
+    const pots = await db.savingsPot.findMany({ where: { userId: user.id, isArchived: false } });
+    const needle = intent.potName.toLowerCase();
+    const targetPot = needle
+      ? pots.find((p) => p.name.toLowerCase().includes(needle) || needle.includes(p.name.toLowerCase()))
+      : pots.length === 1
+      ? pots[0]
+      : undefined;
 
-      if (!targetPot) {
-        return NextResponse.json({ error: 'Kein Spartopf gefunden' }, { status: 404 });
-      }
-
-      const newAmount = targetPot.currentAmount + intent.amount;
-      const [updatedPot, tx] = await db.$transaction([
-        db.savingsPot.update({
-          where: { id: targetPot.id },
-          data: { currentAmount: newAmount },
-        }),
-        db.transaction.create({
-          data: {
-            userId: user.id,
-            savingsPotId: targetPot.id,
-            title: `Einzahlung: ${targetPot.name}`,
-            amount: -intent.amount,
-            category: 'Sparen',
-            type: 'transfer_to_pot',
-            transactionDate: new Date(),
-          },
-        }),
-      ]);
-
-      return NextResponse.json({
-        type: 'deposit',
-        message: `${intent.amount.toFixed(2)} € in "${updatedPot.name}" eingezahlt!`,
-        data: { pot: updatedPot, transaction: tx },
-      });
+    if (!targetPot) {
+      const names = pots.map((p) => `„${p.name}“`).join(', ');
+      return jsonError(
+        pots.length
+          ? `Kein passender Spartopf${intent.potName ? ` für „${intent.potName}“` : ''} gefunden. Verfügbar: ${names}`
+          : 'Du hast noch keinen Spartopf angelegt.',
+        404
+      );
     }
 
-    return NextResponse.json({ error: 'Unknown intent' }, { status: 400 });
+    const [pot, tx] = await db.$transaction([
+      db.savingsPot.update({ where: { id: targetPot.id }, data: { currentAmount: { increment: intent.amount } } }),
+      db.transaction.create({
+        data: {
+          userId: user.id,
+          savingsPotId: targetPot.id,
+          title: `Einzahlung: ${targetPot.name}`,
+          amount: -intent.amount,
+          category: 'Sparen',
+          type: 'transfer_to_pot',
+        },
+      }),
+    ]);
+
+    return NextResponse.json({
+      type: 'deposit',
+      message: `${intent.amount.toFixed(2)} € in „${pot.name}“ eingezahlt`,
+      data: { pot, transaction: tx },
+    });
   } catch (error) {
-    console.error('Quick add error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return serverError('POST /quick-add', error);
   }
 }

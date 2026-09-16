@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getCurrentUser, readPreferences } from '@/lib/user';
+import { toSafeUntisConfig } from '@/lib/webuntis';
+import { cleanString, jsonError, readJson, serverError, toNumber } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
 export async function GET() {
   try {
-    const user = await db.user.findFirst();
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
-
+    const user = await getCurrentUser();
     const [subjects, untisConfig] = await Promise.all([
-      db.subject.findMany({ where: { userId: user.id } }),
+      db.subject.findMany({ where: { userId: user.id }, orderBy: { name: 'asc' } }),
       db.webUntisConfig.findUnique({ where: { userId: user.id } }),
     ]);
 
@@ -19,52 +22,90 @@ export async function GET() {
         email: user.email,
         displayName: user.displayName,
         monthlyBudget: user.monthlyBudget,
-        preferences: JSON.parse(user.preferences || '{}'),
+        startingBalance: user.startingBalance,
+        preferences: readPreferences(user),
       },
       subjects,
-      untisConfig,
+      untisConfig: toSafeUntisConfig(untisConfig),
     });
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch settings' }, { status: 500 });
+    return serverError('GET /settings', error);
   }
+}
+
+interface SubjectPayload {
+  id?: string;
+  name?: string;
+  colorHex?: string;
+  untisCode?: string | null;
 }
 
 export async function POST(req: Request) {
   try {
-    const user = await db.user.findFirst();
-    if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    const user = await getCurrentUser();
+    const body = await readJson(req);
 
-    const body = await req.json();
-    const { displayName, monthlyBudget, preferences, subjects } = body;
+    const displayName = cleanString(body.displayName, 60);
+    const monthlyBudget = body.monthlyBudget !== undefined ? toNumber(body.monthlyBudget) : undefined;
+    const startingBalance = body.startingBalance !== undefined ? toNumber(body.startingBalance) : undefined;
+    if (monthlyBudget === null || (monthlyBudget !== undefined && monthlyBudget < 0)) {
+      return jsonError('Monatsbudget muss eine positive Zahl sein');
+    }
+    if (startingBalance === null) return jsonError('Ungültiger Startkontostand');
+
+    const preferences =
+      body.preferences && typeof body.preferences === 'object'
+        ? JSON.stringify({ ...readPreferences(user), ...body.preferences })
+        : undefined;
 
     const updatedUser = await db.user.update({
       where: { id: user.id },
       data: {
         ...(displayName && { displayName }),
-        ...(monthlyBudget !== undefined && { monthlyBudget: parseFloat(monthlyBudget) }),
-        ...(preferences && { preferences: JSON.stringify(preferences) }),
+        ...(monthlyBudget !== undefined && { monthlyBudget }),
+        ...(startingBalance !== undefined && { startingBalance }),
+        ...(preferences && { preferences }),
       },
     });
 
-    // Update subjects if passed
-    if (Array.isArray(subjects)) {
-      for (const subj of subjects) {
+    if (Array.isArray(body.deletedSubjectIds) && body.deletedSubjectIds.length) {
+      await db.subject.deleteMany({
+        where: { userId: user.id, id: { in: body.deletedSubjectIds.map(String) } },
+      });
+    }
+
+    if (Array.isArray(body.subjects)) {
+      for (const subj of body.subjects as SubjectPayload[]) {
+        const name = cleanString(subj.name, 60);
+        const colorHex = subj.colorHex && HEX_COLOR.test(subj.colorHex) ? subj.colorHex : undefined;
+        const untisCode = subj.untisCode !== undefined ? cleanString(subj.untisCode, 12) || null : undefined;
+
         if (subj.id) {
-          await db.subject.update({
-            where: { id: subj.id },
-            data: {
-              ...(subj.name && { name: subj.name }),
-              ...(subj.colorHex && { colorHex: subj.colorHex }),
-              ...(subj.untisCode !== undefined && { untisCode: subj.untisCode }),
-            },
+          const { count } = await db.subject.updateMany({
+            where: { id: subj.id, userId: user.id },
+            data: { ...(name && { name }), ...(colorHex && { colorHex }), ...(untisCode !== undefined && { untisCode }) },
+          });
+          // Lessons display the subject color, keep them in sync.
+          if (count && colorHex) {
+            await db.scheduleBlock.updateMany({ where: { userId: user.id, subjectId: subj.id }, data: { colorHex } });
+          }
+        } else if (name) {
+          await db.subject.create({
+            data: { userId: user.id, name, colorHex: colorHex ?? '#6366F1', untisCode: untisCode ?? null },
           });
         }
       }
     }
 
-    return NextResponse.json({ success: true, user: updatedUser });
+    return NextResponse.json({
+      success: true,
+      user: {
+        displayName: updatedUser.displayName,
+        monthlyBudget: updatedUser.monthlyBudget,
+        startingBalance: updatedUser.startingBalance,
+      },
+    });
   } catch (error) {
-    console.error('Settings update error:', error);
-    return NextResponse.json({ error: 'Failed to save settings' }, { status: 500 });
+    return serverError('POST /settings', error, 'Einstellungen konnten nicht gespeichert werden');
   }
 }

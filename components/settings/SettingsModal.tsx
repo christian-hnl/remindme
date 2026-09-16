@@ -1,561 +1,292 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { WebUntisConfig, Subject } from '@/types';
-import { 
-  Settings, 
-  X, 
-  School, 
-  Calendar, 
-  Wallet, 
-  Palette, 
-  Database, 
-  Check, 
-  RefreshCw, 
-  Sparkles, 
-  ShieldCheck, 
-  Download, 
-  AlertCircle,
-  ExternalLink,
-  Plus
-} from 'lucide-react';
-import { fireMilestoneGlow } from '@/lib/confetti';
+import React, { useEffect, useState } from 'react';
+import { CalendarPlus, Download, Plus, Settings, Trash2 } from 'lucide-react';
+import type { DashboardSummary, Subject, WebUntisConfig } from '@/types';
+import { Modal } from '@/components/ui/Modal';
+import { useToast } from '@/components/ui/Toast';
+import { WebUntisConfigForm } from '@/components/webuntis/WebUntisConfigForm';
+import { BankingSettings } from './BankingSettings';
+import { api, errorMessage } from '@/lib/client';
+import { parseAmount } from '@/lib/format';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  untisConfig: WebUntisConfig | null;
+  user: DashboardSummary['user'];
   subjects: Subject[];
-  user: {
-    displayName: string;
-    monthlyBudget?: number;
-  };
+  untisConfig: WebUntisConfig | null;
   onSettingsSaved: () => void;
-  onOpenUntisModal?: () => void;
-  onOpenAppleSyncModal?: () => void;
+  onUntisSynced: (message: string) => void;
+  onOpenAppleSyncModal: () => void;
+  initialTab?: SettingsTab;
+  banking: DashboardSummary['banking'];
+  onBankingChanged: () => void;
 }
+
+export type SettingsTab = 'profile' | 'school' | 'subjects' | 'banks' | 'data';
+type Tab = SettingsTab;
+
+interface SubjectDraft {
+  key: string;
+  id?: string;
+  name: string;
+  untisCode: string;
+  colorHex: string;
+}
+
+const COLOR_PALETTE = ['#2A4BDC', '#8B5CF6', '#EC4899', '#E11D48', '#F59E0B', '#CA8A04', '#10B981', '#0D9488', '#06B6D4', '#64748B'];
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'profile', label: 'Profil & Geld' },
+  { id: 'school', label: 'WebUntis' },
+  { id: 'subjects', label: 'Fächer' },
+  { id: 'banks', label: 'Banken' },
+  { id: 'data', label: 'Daten' },
+];
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
-  untisConfig,
-  subjects: initialSubjects,
   user,
+  subjects,
+  untisConfig,
   onSettingsSaved,
-  onOpenUntisModal,
+  onUntisSynced,
   onOpenAppleSyncModal,
+  initialTab,
+  banking,
+  onBankingChanged,
 }) => {
-  const [activeTab, setActiveTab] = useState<'integrations' | 'general' | 'subjects' | 'data'>('integrations');
-
-  // General settings state
-  const [displayName, setDisplayName] = useState(user.displayName || 'Alexander');
-  const [monthlyBudget, setMonthlyBudget] = useState(user.monthlyBudget ? user.monthlyBudget.toString() : '580');
-
-  // WebUntis state
-  const [server, setServer] = useState(untisConfig?.server || 'arche.webuntis.com');
-  const [school, setSchool] = useState(untisConfig?.school || 'gym-st-michael');
-  const [schoolName, setSchoolName] = useState(untisConfig?.schoolName || 'Gymnasium St. Michael');
-  const [username, setUsername] = useState(untisConfig?.username || 'alexander.student');
-  const [password, setPassword] = useState('');
-  const [icalUrl, setIcalUrl] = useState(untisConfig?.icalUrl || '');
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-
-  // Subjects state
-  const [subjectsList, setSubjectsList] = useState<Subject[]>(initialSubjects);
-
-  // Saving state
+  const toast = useToast();
+  const [tab, setTab] = useState<Tab>('profile');
+  const [displayName, setDisplayName] = useState('');
+  const [monthlyBudget, setMonthlyBudget] = useState('');
+  const [startingBalance, setStartingBalance] = useState('');
+  const [subjectDrafts, setSubjectDrafts] = useState<SubjectDraft[]>([]);
+  const [deletedIds, setDeletedIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Initialise only when opening, so background refreshes don't wipe edits.
   useEffect(() => {
-    setSubjectsList(initialSubjects);
-  }, [initialSubjects]);
+    if (!isOpen) return;
+    setTab(initialTab ?? 'profile');
+    setDisplayName(user.displayName);
+    setMonthlyBudget(String(user.monthlyBudget));
+    setStartingBalance(String(user.startingBalance));
+    setSubjectDrafts(subjects.map((s) => ({ key: s.id, id: s.id, name: s.name, untisCode: s.untisCode ?? '', colorHex: s.colorHex })));
+    setDeletedIds([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
-  if (!isOpen) return null;
+  const updateSubject = (key: string, patch: Partial<SubjectDraft>) =>
+    setSubjectDrafts((list) => list.map((s) => (s.key === key ? { ...s, ...patch } : s)));
 
-  const handleTestUntis = async () => {
-    setIsTesting(true);
-    setTestResult(null);
-    try {
-      const res = await fetch('/api/v1/webuntis/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ server, school, username, password }),
-      });
-      const data = await res.json();
-      setTestResult(data);
-      if (data.success) fireMilestoneGlow();
-    } catch (err: any) {
-      setTestResult({ success: false, message: 'Verbindungstest fehlgeschlagen.' });
-    } finally {
-      setIsTesting(false);
-    }
+  const removeSubject = (draft: SubjectDraft) => {
+    setSubjectDrafts((list) => list.filter((s) => s.key !== draft.key));
+    if (draft.id) setDeletedIds((ids) => [...ids, draft.id!]);
   };
 
-  const handleSyncUntis = async () => {
-    setIsSyncing(true);
-    try {
-      // First save untis config
-      await fetch('/api/v1/webuntis/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ server, school, schoolName, username, password, icalUrl }),
-      });
+  const addSubject = () =>
+    setSubjectDrafts((list) => [...list, { key: `new-${Date.now()}`, name: '', untisCode: '', colorHex: COLOR_PALETTE[list.length % COLOR_PALETTE.length] }]);
 
-      const res = await fetch('/api/v1/webuntis/sync', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
-        setTestResult({ success: true, message: data.message });
-        fireMilestoneGlow();
-        onSettingsSaved();
-      } else {
-        alert(data.error || 'Sync fehlgeschlagen');
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+  const handleSave = async () => {
+    const budget = parseAmount(monthlyBudget);
+    const balance = parseAmount(startingBalance);
+    if (!displayName.trim()) return toast('Bitte einen Namen eingeben', 'error');
+    if (!(budget >= 0)) return toast('Das Monatsbudget muss 0 oder mehr sein', 'error');
+    if (Number.isNaN(balance)) return toast('Ungültiger Startkontostand', 'error');
 
-  const handleSaveAll = async () => {
     setSaving(true);
     try {
-      // 1. Save general settings & subjects
-      await fetch('/api/v1/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          displayName,
-          monthlyBudget: parseFloat(monthlyBudget) || 580,
-          subjects: subjectsList,
-        }),
+      await api('/api/v1/settings', {
+        body: {
+          displayName: displayName.trim(),
+          monthlyBudget: budget,
+          startingBalance: balance,
+          subjects: subjectDrafts
+            .filter((s) => s.name.trim())
+            .map(({ id, name, untisCode, colorHex }) => ({ id, name: name.trim(), untisCode: untisCode.trim() || null, colorHex })),
+          deletedSubjectIds: deletedIds,
+        },
       });
-
-      // 2. Save WebUntis config
-      await fetch('/api/v1/webuntis/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          server,
-          school,
-          schoolName,
-          username,
-          password: password || undefined,
-          icalUrl: icalUrl || null,
-        }),
-      });
-
-      setSaveSuccess(true);
-      fireMilestoneGlow();
+      toast('Einstellungen gespeichert');
       onSettingsSaved();
-      setTimeout(() => setSaveSuccess(false), 2500);
-    } catch (err) {
-      console.error('Save error', err);
-      alert('Fehler beim Speichern der Einstellungen');
+      onClose();
+    } catch (error) {
+      toast(`Speichern fehlgeschlagen: ${errorMessage(error)}`, 'error');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleExportBackup = () => {
-    window.open('/api/v1/dashboard/summary', '_blank');
-  };
-
-  const colorPalette = ['#6366F1', '#8B5CF6', '#F59E0B', '#10B981', '#EC4899', '#3B82F6', '#06B6D4', '#EAB308'];
+  const hasFormFooter = tab === 'profile' || tab === 'subjects';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
-      <div 
-        className="w-full max-w-3xl rounded-3xl bg-[#11141D] border border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06] bg-[#141824] flex-shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-              <Settings className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-white">System & Einstellungen</h3>
-              <p className="text-xs text-muted">Integrationen, Safe-to-Spend Budget & Fächer-Verwaltung</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-muted hover:text-white p-1 rounded-lg">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Content Body with Tabs */}
-        <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-          {/* Navigation Sidebar */}
-          <div className="w-full md:w-56 p-3 border-r border-white/[0.06] bg-[#0D1017]/40 flex-shrink-0 flex md:flex-col gap-1 overflow-x-auto scrollbar-none">
-            <button
-              onClick={() => setActiveTab('integrations')}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left whitespace-nowrap ${
-                activeTab === 'integrations'
-                  ? 'bg-indigo-600/25 text-indigo-300 border border-indigo-500/40 shadow-sm'
-                  : 'text-muted hover:text-white hover:bg-white/5'
-              }`}
-            >
-              <School className="h-4 w-4 text-purple-400" />
-              <span>Integrationen</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('general')}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left whitespace-nowrap ${
-                activeTab === 'general'
-                  ? 'bg-indigo-600/25 text-indigo-300 border border-indigo-500/40 shadow-sm'
-                  : 'text-muted hover:text-white hover:bg-white/5'
-              }`}
-            >
-              <Wallet className="h-4 w-4 text-emerald-400" />
-              <span>Budget & Profil</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('subjects')}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left whitespace-nowrap ${
-                activeTab === 'subjects'
-                  ? 'bg-indigo-600/25 text-indigo-300 border border-indigo-500/40 shadow-sm'
-                  : 'text-muted hover:text-white hover:bg-white/5'
-              }`}
-            >
-              <Palette className="h-4 w-4 text-amber-400" />
-              <span>Fächer & Untis</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('data')}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-medium transition-all text-left whitespace-nowrap ${
-                activeTab === 'data'
-                  ? 'bg-indigo-600/25 text-indigo-300 border border-indigo-500/40 shadow-sm'
-                  : 'text-muted hover:text-white hover:bg-white/5'
-              }`}
-            >
-              <Database className="h-4 w-4 text-blue-400" />
-              <span>Daten & Backup</span>
-            </button>
-          </div>
-
-          {/* Tab Content Panel */}
-          <div className="flex-1 p-6 overflow-y-auto max-h-[520px] space-y-5">
-            
-            {/* ================================================================= */}
-            {/* TAB 1: INTEGRATIONEN (WebUntis, Apple, Banking)                    */}
-            {/* ================================================================= */}
-            {activeTab === 'integrations' && (
-              <div className="space-y-5">
-                {/* WebUntis Section */}
-                <div className="p-4 rounded-2xl bg-[#161B26] border border-white/5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <School className="h-4 w-4 text-purple-400" />
-                      <span className="font-semibold text-sm text-white">WebUntis Konfiguration</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-purple-500/20 text-purple-300">
-                      JSON-RPC 2.0 & iCal
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-muted leading-relaxed">
-                    Trage deine WebUntis-Zugangsdaten oder deinen privaten iCal-Abonnement-Link ein, um Stundenplan, Räume, Lehrer und Hausaufgaben automatisch zu synchronisieren.
-                  </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    <div>
-                      <label className="block text-[11px] text-muted uppercase font-medium mb-1">Untis Server</label>
-                      <input
-                        type="text"
-                        value={server}
-                        onChange={(e) => setServer(e.target.value)}
-                        placeholder="arche.webuntis.com"
-                        className="w-full rounded-xl bg-[#11141D] border border-white/10 px-3 py-2 text-xs text-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-muted uppercase font-medium mb-1">Schul-Kürzel</label>
-                      <input
-                        type="text"
-                        value={school}
-                        onChange={(e) => setSchool(e.target.value)}
-                        placeholder="gym-st-michael"
-                        className="w-full rounded-xl bg-[#11141D] border border-white/10 px-3 py-2 text-xs text-white font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] text-muted uppercase font-medium mb-1">Benutzername</label>
-                      <input
-                        type="text"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        placeholder="alexander.student"
-                        className="w-full rounded-xl bg-[#11141D] border border-white/10 px-3 py-2 text-xs text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-muted uppercase font-medium mb-1">Passwort</label>
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full rounded-xl bg-[#11141D] border border-white/10 px-3 py-2 text-xs text-white"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] text-muted uppercase font-medium mb-1">
-                      Oder privater Untis iCal Feed-Link (Optional)
-                    </label>
-                    <input
-                      type="url"
-                      value={icalUrl}
-                      onChange={(e) => setIcalUrl(e.target.value)}
-                      placeholder="https://arche.webuntis.com/WebUntis/ical?school=..."
-                      className="w-full rounded-xl bg-[#11141D] border border-white/10 px-3 py-2 text-xs text-white font-mono"
-                    />
-                  </div>
-
-                  {testResult && (
-                    <div className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-                      testResult.success
-                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
-                        : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
-                    }`}>
-                      {testResult.success ? <Check className="h-4 w-4 text-emerald-400" /> : <AlertCircle className="h-4 w-4 text-rose-400" />}
-                      <span>{testResult.message}</span>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between pt-2 border-t border-white/5 flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setServer('arche.webuntis.com');
-                        setSchool('gym-st-michael');
-                        setSchoolName('Gymnasium St. Michael');
-                        setUsername('alexander.student');
-                      }}
-                      className="text-xs text-indigo-400 hover:text-indigo-300 underline"
-                    >
-                      Demo-Schule eintragen
-                    </button>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleTestUntis}
-                        disabled={isTesting}
-                        className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-white text-xs border border-white/10"
-                      >
-                        {isTesting ? 'Teste...' : 'Verbindung testen'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleSyncUntis}
-                        disabled={isSyncing}
-                        className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow"
-                      >
-                        <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                        <span>{isSyncing ? 'Synchronisiere...' : 'Jetzt Synchronisieren'}</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Apple & Google Calendar Feed */}
-                <div className="p-4 rounded-2xl bg-[#161B26] border border-white/5 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-indigo-400" />
-                    <span className="font-semibold text-sm text-white">Apple Kalender & Google Calendar Feed</span>
-                  </div>
-                  <p className="text-xs text-muted leading-relaxed">
-                    Alle Hausaufgaben, WebUntis-Vorlesungen und terminierte Erinnerungen werden via iCal live bereitgestellt.
-                  </p>
-                  <div className="text-xs font-mono text-indigo-300 bg-black/40 p-2 rounded-xl border border-white/5 select-all">
-                    webcal://{typeof window !== 'undefined' ? window.location.host : 'localhost:3000'}/api/v1/calendar/ical
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ================================================================= */}
-            {/* TAB 2: BUDGET & ALLGEMEIN                                         */}
-            {/* ================================================================= */}
-            {activeTab === 'general' && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-2xl bg-[#161B26] border border-white/5 space-y-3">
-                  <span className="font-semibold text-sm text-white block">Benutzerprofil</span>
-                  
-                  <div>
-                    <label className="block text-[11px] text-muted uppercase font-medium mb-1">Anzeigename</label>
-                    <input
-                      type="text"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      className="w-full rounded-xl bg-[#11141D] border border-white/10 px-3.5 py-2 text-xs text-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Safe-to-Spend Monthly Budget */}
-                <div className="p-4 rounded-2xl bg-[#161B26] border border-white/5 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Wallet className="h-4 w-4 text-emerald-400" />
-                    <span className="font-semibold text-sm text-white">Safe-to-Spend Puffer-Budget</span>
-                  </div>
-                  <p className="text-xs text-muted leading-relaxed">
-                    Wie viel freies Geld möchtest du pro Monat für Freizeit, Essen & spontane Ausgaben verplanen? Dieser Betrag wird durch die verbleibenden Tage des Monats geteilt und berechnet die Anzeige: <strong>„Heute noch X € frei“</strong>.
-                  </p>
-
-                  <div className="relative max-w-xs">
-                    <input
-                      type="number"
-                      step="10"
-                      value={monthlyBudget}
-                      onChange={(e) => setMonthlyBudget(e.target.value)}
-                      placeholder="580"
-                      className="w-full rounded-xl bg-[#11141D] border border-white/10 px-3.5 py-2 text-sm text-white font-mono"
-                    />
-                    <span className="absolute right-3.5 top-2 text-sm text-muted">€ / Monat</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ================================================================= */}
-            {/* TAB 3: FÄCHER & FARBEN                                            */}
-            {/* ================================================================= */}
-            {activeTab === 'subjects' && (
-              <div className="space-y-3">
-                <div className="text-xs text-muted leading-relaxed mb-2">
-                  Passe die Schulfächer, Untis-Kürzel und Farben für deinen Stundenplan an:
-                </div>
-
-                <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
-                  {subjectsList.map((subj, idx) => (
-                    <div key={subj.id || idx} className="p-3 rounded-2xl bg-[#161B26] border border-white/5 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span
-                          className="h-4 w-4 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: subj.colorHex }}
-                        />
-                        <div>
-                          <input
-                            type="text"
-                            value={subj.name}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSubjectsList((prev) =>
-                                prev.map((s, i) => (i === idx ? { ...s, name: val } : s))
-                              );
-                            }}
-                            className="bg-transparent text-xs font-semibold text-white focus:outline-none"
-                          />
-                          <div className="text-[10px] text-muted flex items-center gap-1 font-mono">
-                            Untis Kürzel:
-                            <input
-                              type="text"
-                              value={subj.untisCode || ''}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSubjectsList((prev) =>
-                                  prev.map((s, i) => (i === idx ? { ...s, untisCode: val } : s))
-                                );
-                              }}
-                              placeholder="Kürzel"
-                              className="w-14 bg-black/40 px-1 py-0.5 rounded border border-white/10 uppercase text-white font-mono text-[10px]"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Color dots */}
-                      <div className="flex items-center gap-1">
-                        {colorPalette.slice(0, 5).map((col) => (
-                          <button
-                            key={col}
-                            type="button"
-                            onClick={() => {
-                              setSubjectsList((prev) =>
-                                prev.map((s, i) => (i === idx ? { ...s, colorHex: col } : s))
-                              );
-                            }}
-                            className={`h-5 w-5 rounded-full border transition-transform ${
-                              subj.colorHex === col ? 'scale-110 border-white' : 'border-transparent opacity-60 hover:opacity-100'
-                            }`}
-                            style={{ backgroundColor: col }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ================================================================= */}
-            {/* TAB 4: DATEN & BACKUP                                             */}
-            {/* ================================================================= */}
-            {activeTab === 'data' && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-2xl bg-[#161B26] border border-white/5 space-y-2">
-                  <span className="font-semibold text-sm text-white block">Vollständiger Daten-Export</span>
-                  <p className="text-xs text-muted">
-                    Lade alle Aufgaben, Stundenpläne, Spartöpfe, Transaktionen und Notizen als strukturierte JSON-Datei herunter.
-                  </p>
-                  <button
-                    onClick={handleExportBackup}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white text-xs border border-white/10 transition-colors"
-                  >
-                    <Download className="h-4 w-4 text-indigo-400" />
-                    <span>JSON Backup herunterladen</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-3.5 border-t border-white/[0.06] bg-[#141824] flex-shrink-0">
-          <div>
-            {saveSuccess && (
-              <span className="text-xs text-emerald-400 flex items-center gap-1">
-                <Check className="h-3.5 w-3.5" /> Einstellungen erfolgreich gespeichert!
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-muted hover:text-white"
-            >
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      size="xl"
+      title="Einstellungen"
+      icon={<Settings className="h-[18px] w-[18px]" />}
+      bodyClassName="flex min-h-0 flex-col md:flex-row"
+      footer={
+        hasFormFooter ? (
+          <>
+            <button type="button" onClick={onClose} className="btn-ghost">
               Abbrechen
             </button>
-            <button
-              type="button"
-              onClick={handleSaveAll}
-              disabled={saving}
-              className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 active:scale-95 transition-all disabled:opacity-50"
-            >
-              {saving ? 'Speichere...' : 'Einstellungen sichern'}
+            <button type="button" onClick={handleSave} disabled={saving} className="btn-primary">
+              {saving ? 'Speichert…' : 'Speichern'}
             </button>
+          </>
+        ) : (
+          <button type="button" onClick={onClose} className="btn-secondary">
+            Fertig
+          </button>
+        )
+      }
+    >
+      <nav
+        className="scrollbar-none flex flex-shrink-0 gap-1 overflow-x-auto border-b border-line/10 p-3 md:w-48 md:flex-col md:border-b-0 md:border-r"
+        role="tablist"
+        aria-label="Bereiche"
+      >
+        {TABS.map(({ id, label }) => (
+          <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className="tab md:w-full md:justify-start md:rounded-[10px]">
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="min-w-0 flex-1 space-y-6 overflow-y-auto p-5 sm:p-6">
+        {tab === 'profile' && (
+          <>
+            <div>
+              <label htmlFor="settings-name" className="field-label">
+                Dein Name
+              </label>
+              <input id="settings-name" value={displayName} maxLength={60} onChange={(e) => setDisplayName(e.target.value)} className="field-input" />
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+              <div>
+                <label htmlFor="settings-budget" className="field-label">
+                  Monatsbudget
+                </label>
+                <div className="relative">
+                  <input id="settings-budget" inputMode="decimal" value={monthlyBudget} onChange={(e) => setMonthlyBudget(e.target.value)} className="field-input pr-9 font-mono" />
+                  <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-3">€</span>
+                </div>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-ink-3">
+                  Geld für Essen, Freizeit und Spontanes – ohne Fixkosten. Daraus wird „Heute frei“ berechnet.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="settings-balance" className="field-label">
+                  Startkontostand
+                </label>
+                <div className="relative">
+                  <input id="settings-balance" inputMode="decimal" value={startingBalance} onChange={(e) => setStartingBalance(e.target.value)} className="field-input pr-9 font-mono" />
+                  <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-3">€</span>
+                </div>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-ink-3">
+                  Kontostand vor deiner ersten Buchung. Der aktuelle Stand ergibt sich aus diesem Wert plus allen Buchungen.
+                </p>
+              </div>
+            </div>
+          </>
+        )}
+
+        {tab === 'school' && (
+          <>
+            <WebUntisConfigForm config={untisConfig} onSynced={onUntisSynced} />
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] bg-inset p-4">
+              <div>
+                <p className="font-bold text-ink">Im Handy-Kalender anzeigen</p>
+                <p className="text-[13px] text-ink-2">Stundenplan, Hausübungen und Erinnerungen als Kalender-Abo.</p>
+              </div>
+              <button type="button" onClick={onOpenAppleSyncModal} className="btn-secondary">
+                <CalendarPlus className="h-4 w-4" /> Einrichten
+              </button>
+            </div>
+          </>
+        )}
+
+        {tab === 'subjects' && (
+          <div>
+            <p className="mb-4 text-[14px] leading-relaxed text-ink-2">
+              Das Kürzel verbindet ein Fach mit WebUntis. Die Farbe erscheint im Stundenplan und bei den Hausübungen.
+            </p>
+            {subjectDrafts.length === 0 && <p className="text-[14px] text-ink-3">Noch keine Fächer.</p>}
+            <ul className="divide-y divide-line/10">
+              {subjectDrafts.map((s) => (
+                <li key={s.key} className="py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="h-5 w-5 flex-shrink-0 rounded-[5px]" style={{ backgroundColor: s.colorHex }} />
+                    <input
+                      value={s.name}
+                      onChange={(e) => updateSubject(s.key, { name: e.target.value })}
+                      placeholder="Fach"
+                      maxLength={60}
+                      autoFocus={!s.id && !s.name}
+                      className="field-input h-10 min-w-0 flex-1 py-0 font-bold"
+                      aria-label="Name des Fachs"
+                    />
+                    <input
+                      value={s.untisCode}
+                      onChange={(e) => updateSubject(s.key, { untisCode: e.target.value })}
+                      placeholder="Kürzel"
+                      maxLength={12}
+                      className="field-input h-10 w-20 py-0 font-mono text-[13px] uppercase"
+                      aria-label="Untis-Kürzel"
+                    />
+                    <button type="button" onClick={() => removeSubject(s)} className="icon-btn hover:text-pen" aria-label={`${s.name || 'Fach'} entfernen`}>
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5 pl-7" role="group" aria-label="Farbe">
+                    {COLOR_PALETTE.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => updateSubject(s.key, { colorHex: color })}
+                        aria-pressed={s.colorHex.toUpperCase() === color}
+                        aria-label={`Farbe ${color}`}
+                        className={`h-7 w-7 rounded-full border-[3px] ${s.colorHex.toUpperCase() === color ? 'border-ink' : 'border-transparent'}`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <button type="button" onClick={addSubject} className="btn-secondary mt-3 w-full">
+              <Plus className="h-4 w-4" /> Fach hinzufügen
+            </button>
+            {deletedIds.length > 0 && (
+              <p className="mt-3 text-[13px] font-bold text-warn">
+                {deletedIds.length === 1 ? '1 Fach wird' : `${deletedIds.length} Fächer werden`} beim Speichern gelöscht. Hausübungen bleiben erhalten.
+              </p>
+            )}
           </div>
-        </div>
+        )}
+
+        {tab === 'banks' && <BankingSettings banking={banking} onChanged={onBankingChanged} />}
+
+        {tab === 'data' && (
+          <div className="space-y-3">
+            <p className="font-bold text-ink">Alles exportieren</p>
+            <p className="text-[14px] leading-relaxed text-ink-2">
+              Lädt alle Aufgaben, Stundenpläne, Erinnerungen, Notizen, Spartöpfe und Buchungen als JSON-Datei herunter. Dein
+              WebUntis-Passwort ist nicht enthalten.
+            </p>
+            <a href="/api/v1/export" download className="btn-secondary w-fit">
+              <Download className="h-4 w-4" /> Backup herunterladen
+            </a>
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 };

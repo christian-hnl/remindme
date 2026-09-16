@@ -1,48 +1,91 @@
 import { NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
+import { findScheduleBlockId } from '@/lib/tasks';
+import {
+  PRIORITIES,
+  TASK_STATUSES,
+  cleanString,
+  jsonError,
+  pickEnum,
+  readJson,
+  serverError,
+  toDate,
+  toNumber,
+} from '@/lib/api';
 
-export async function PATCH(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+type Params = { params: { id: string } };
+
+export async function PATCH(req: Request, { params }: Params) {
   try {
-    const { id } = params;
-    const body = await req.json();
+    const user = await getCurrentUser();
+    const task = await db.task.findFirst({ where: { id: params.id, userId: user.id } });
+    if (!task) return jsonError('Aufgabe nicht gefunden', 404);
 
-    const task = await db.task.update({
-      where: { id },
-      data: {
-        ...(body.status && { status: body.status }),
-        ...(body.priority && { priority: body.priority }),
-        ...(body.title && { title: body.title }),
-        ...(body.description !== undefined && { description: body.description }),
-        ...(body.dueDate && { dueDate: new Date(body.dueDate) }),
-        ...(body.estimatedMinutes && { estimatedMinutes: parseInt(body.estimatedMinutes, 10) }),
-        ...(body.subjectId !== undefined && { subjectId: body.subjectId }),
-      },
+    const body = await readJson(req);
+    const data: Prisma.TaskUncheckedUpdateInput = {};
+
+    const status = pickEnum(body.status, TASK_STATUSES);
+    if (status) data.status = status;
+    const priority = pickEnum(body.priority, PRIORITIES);
+    if (priority) data.priority = priority;
+
+    if (body.title !== undefined) {
+      const title = cleanString(body.title, 200);
+      if (!title) return jsonError('Titel darf nicht leer sein');
+      data.title = title;
+    }
+    if (body.description !== undefined) data.description = cleanString(body.description, 5000) || null;
+
+    let dueDate = task.dueDate;
+    if (body.dueDate !== undefined) {
+      const parsed = toDate(body.dueDate);
+      if (!parsed) return jsonError('Ungültiges Fälligkeitsdatum');
+      data.dueDate = dueDate = parsed;
+    }
+
+    if (body.estimatedMinutes !== undefined) {
+      const minutes = toNumber(body.estimatedMinutes);
+      if (minutes === null) return jsonError('Ungültiger Zeitaufwand');
+      data.estimatedMinutes = Math.min(24 * 60, Math.max(5, Math.round(minutes)));
+    }
+
+    let subjectId = task.subjectId;
+    if (body.subjectId !== undefined) {
+      if (body.subjectId) {
+        const subject = await db.subject.findFirst({ where: { id: String(body.subjectId), userId: user.id } });
+        if (!subject) return jsonError('Fach nicht gefunden', 404);
+        subjectId = subject.id;
+      } else {
+        subjectId = null;
+      }
+      data.subjectId = subjectId;
+    }
+
+    // Keep the lesson link in sync with subject / due date changes.
+    if (body.subjectId !== undefined || body.dueDate !== undefined) {
+      data.scheduleBlockId = await findScheduleBlockId(user.id, subjectId, dueDate);
+    }
+
+    const updated = await db.task.update({
+      where: { id: task.id },
+      data,
       include: { subject: true },
     });
-
-    return NextResponse.json(task);
+    return NextResponse.json(updated);
   } catch (error) {
-    console.error('Error updating task:', error);
-    return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+    return serverError('PATCH /tasks/[id]', error, 'Aufgabe konnte nicht aktualisiert werden');
   }
 }
 
-export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(_req: Request, { params }: Params) {
   try {
-    const { id } = params;
-    await db.task.delete({
-      where: { id },
-    });
-
-    return NextResponse.json({ success: true, id });
+    const user = await getCurrentUser();
+    const { count } = await db.task.deleteMany({ where: { id: params.id, userId: user.id } });
+    if (!count) return jsonError('Aufgabe nicht gefunden', 404);
+    return NextResponse.json({ success: true, id: params.id });
   } catch (error) {
-    console.error('Error deleting task:', error);
-    return NextResponse.json({ error: 'Failed to delete task' }, { status: 500 });
+    return serverError('DELETE /tasks/[id]', error, 'Aufgabe konnte nicht gelöscht werden');
   }
 }

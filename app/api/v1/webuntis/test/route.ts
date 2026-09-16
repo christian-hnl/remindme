@@ -1,14 +1,28 @@
 import { NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { getCurrentUser } from '@/lib/user';
 import { testUntisConnection } from '@/lib/webuntis';
+import { readJson } from '@/lib/api';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const { server, school, username, password } = body;
+  const body = await readJson(req);
+  const user = await getCurrentUser();
+  const stored = await db.webUntisConfig.findUnique({ where: { userId: user.id } });
 
-    const result = await testUntisConnection(server, school, username, password);
-    return NextResponse.json(result);
-  } catch (err: any) {
-    return NextResponse.json({ success: false, message: err.message || 'Verbindungstest fehlgeschlagen' }, { status: 200 });
-  }
+  // Allow testing with the saved password without re-entering it, as long as the
+  // account (server, school, user) is unchanged.
+  const sameAccount =
+    stored && stored.server === body.server && stored.school === body.school && stored.username === body.username;
+  const password = body.password || (sameAccount ? stored.password : null);
+
+  const result = await testUntisConnection({
+    server: body.server,
+    school: body.school,
+    username: body.username,
+    password,
+    icalUrl: body.icalUrl,
+  });
+  return NextResponse.json(result);
 }

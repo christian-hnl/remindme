@@ -1,152 +1,198 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Play, Pause, RotateCcw, Flame, Coffee, Sparkles } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Pause, Play, RotateCcw, SkipForward } from 'lucide-react';
+import { toDateInput } from '@/lib/format';
+
+type Mode = 'focus' | 'break';
+
+const PRESETS = [
+  { label: '25 / 5', focus: 25, break: 5 },
+  { label: '50 / 10', focus: 50, break: 10 },
+];
+
+const STORAGE_KEY = 'lifetracker:pomodoro';
+const RADIUS = 80;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+function playChime() {
+  try {
+    const ctx = new AudioContext();
+    [0, 0.25].forEach((offset, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = i === 0 ? 880 : 1175;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + offset);
+      gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + offset + 0.6);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + offset);
+      osc.stop(ctx.currentTime + offset + 0.65);
+    });
+    setTimeout(() => ctx.close(), 1500);
+  } catch {
+    // Audio not available – notification and title still signal the end.
+  }
+}
 
 export const PomodoroTimer: React.FC = () => {
-  const [mode, setMode] = useState<'focus' | 'break'>('focus');
-  const [timeLeft, setTimeLeft] = useState(25 * 60);
-  const [isRunning, setIsRunning] = useState(false);
-  const [sessionsCompleted, setSessionsCompleted] = useState(2);
+  const [presetIndex, setPresetIndex] = useState(0);
+  const [mode, setMode] = useState<Mode>('focus');
+  const preset = PRESETS[presetIndex];
+  const durationMs = (mode === 'focus' ? preset.focus : preset.break) * 60_000;
+
+  // Timestamps instead of decrementing counters: stays exact in background tabs.
+  const [endAt, setEndAt] = useState<number | null>(null);
+  const [remainingMs, setRemainingMs] = useState(durationMs);
+  const [sessionsToday, setSessionsToday] = useState(0);
+  const originalTitle = useRef<string | null>(null);
 
   useEffect(() => {
-    let timer: any;
-    if (isRunning && timeLeft > 0) {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (timeLeft === 0) {
-      setIsRunning(false);
-      if (mode === 'focus') {
-        setSessionsCompleted((prev) => prev + 1);
-        setMode('break');
-        setTimeLeft(5 * 60);
-      } else {
-        setMode('focus');
-        setTimeLeft(25 * 60);
-      }
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      if (stored.date === toDateInput(new Date())) setSessionsToday(stored.count || 0);
+    } catch {
+      // ignore
     }
-    return () => clearInterval(timer);
-  }, [isRunning, timeLeft, mode]);
+  }, []);
 
-  const toggleTimer = () => setIsRunning(!isRunning);
+  const complete = useCallback(() => {
+    setEndAt(null);
+    playChime();
+    const finishedFocus = mode === 'focus';
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      new Notification(finishedFocus ? 'Lernblock geschafft ☕' : 'Pause vorbei', {
+        body: finishedFocus ? `Gönn dir ${preset.break} Minuten Pause.` : `Nächster Block: ${preset.focus} Minuten.`,
+      });
+    }
+    if (finishedFocus) {
+      setSessionsToday((count) => {
+        const next = count + 1;
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ date: toDateInput(new Date()), count: next }));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    }
+    const nextMode: Mode = finishedFocus ? 'break' : 'focus';
+    setMode(nextMode);
+    setRemainingMs((nextMode === 'focus' ? preset.focus : preset.break) * 60_000);
+  }, [mode, preset]);
 
-  const resetTimer = () => {
-    setIsRunning(false);
-    setTimeLeft(mode === 'focus' ? 25 * 60 : 5 * 60);
+  useEffect(() => {
+    if (endAt === null) return;
+    const tick = () => {
+      const left = endAt - Date.now();
+      if (left <= 0) complete();
+      else setRemainingMs(left);
+    };
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [endAt, complete]);
+
+  const seconds = Math.ceil(remainingMs / 1000);
+  const formatted = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  const isRunning = endAt !== null;
+
+  useEffect(() => {
+    if (originalTitle.current === null) originalTitle.current = document.title;
+    document.title = isRunning ? `${formatted} · ${mode === 'focus' ? 'Lernen' : 'Pause'}` : originalTitle.current;
+  }, [isRunning, formatted, mode]);
+
+  useEffect(
+    () => () => {
+      if (originalTitle.current !== null) document.title = originalTitle.current;
+    },
+    []
+  );
+
+  const start = () => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+    setEndAt(Date.now() + remainingMs);
   };
 
-  const setTimerMode = (newMode: 'focus' | 'break') => {
-    setIsRunning(false);
-    setMode(newMode);
-    setTimeLeft(newMode === 'focus' ? 25 * 60 : 5 * 60);
+  const pause = () => {
+    if (endAt !== null) setRemainingMs(Math.max(0, endAt - Date.now()));
+    setEndAt(null);
   };
 
-  const totalTime = mode === 'focus' ? 25 * 60 : 5 * 60;
-  const progressPercent = ((totalTime - timeLeft) / totalTime) * 100;
+  const switchTo = (nextMode: Mode, nextPreset = presetIndex) => {
+    setEndAt(null);
+    setMode(nextMode);
+    setPresetIndex(nextPreset);
+    const p = PRESETS[nextPreset];
+    setRemainingMs((nextMode === 'focus' ? p.focus : p.break) * 60_000);
+  };
 
-  const minutes = Math.floor(timeLeft / 60);
-  const seconds = timeLeft % 60;
-  const formattedTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  const progress = Math.min(1, Math.max(0, 1 - remainingMs / durationMs));
 
   return (
-    <div className="rounded-3xl bg-[#11141D] border border-white/[0.06] p-5 shadow-bento glow-card">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-            <Flame className="h-4 w-4" />
-          </div>
-          <div>
-            <h3 className="text-sm font-semibold text-white tracking-tight">Deep Focus Timer</h3>
-            <p className="text-[11px] text-muted">Pomodoro Session • {sessionsCompleted} abgeschlossen</p>
-          </div>
+    <section className="card card-pad" aria-label="Lern-Timer">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">Fokus</p>
+          <h2 className="card-title mt-1">Lern-Timer</h2>
+          <p className="mt-1 text-[13px] text-ink-3">
+            {sessionsToday === 0 ? 'Heute noch kein Block' : `${sessionsToday} ${sessionsToday === 1 ? 'Block' : 'Blöcke'} geschafft`}
+          </p>
         </div>
-
-        {/* Mode Toggles */}
-        <div className="flex items-center gap-1 bg-[#1A1F2C] p-1 rounded-xl border border-white/5 text-[11px]">
-          <button
-            onClick={() => setTimerMode('focus')}
-            className={`px-2 py-0.5 rounded-lg transition-colors ${
-              mode === 'focus' ? 'bg-indigo-600 text-white font-medium' : 'text-muted hover:text-white'
-            }`}
-          >
-            Fokus
+        <div className="segmented w-[140px] grid-cols-2" role="group" aria-label="Phase">
+          <button type="button" aria-pressed={mode === 'focus'} onClick={() => switchTo('focus')} className="segmented-item min-h-[34px]">
+            Lernen
           </button>
-          <button
-            onClick={() => setTimerMode('break')}
-            className={`px-2 py-0.5 rounded-lg transition-colors ${
-              mode === 'break' ? 'bg-emerald-600 text-white font-medium' : 'text-muted hover:text-white'
-            }`}
-          >
+          <button type="button" aria-pressed={mode === 'break'} onClick={() => switchTo('break')} className="segmented-item min-h-[34px]">
             Pause
           </button>
         </div>
       </div>
 
-      {/* Timer Circle & Digits */}
-      <div className="flex items-center justify-between px-2 py-3">
-        <div className="relative flex items-center justify-center">
-          <svg className="w-24 h-24 transform -rotate-90">
-            <circle
-              cx="48"
-              cy="48"
-              r="40"
-              stroke="rgba(255,255,255,0.06)"
-              strokeWidth="6"
-              fill="transparent"
-            />
-            <circle
-              cx="48"
-              cy="48"
-              r="40"
-              stroke={mode === 'focus' ? '#6366F1' : '#10B981'}
-              strokeWidth="6"
-              strokeDasharray={251.2}
-              strokeDashoffset={251.2 - (251.2 * progressPercent) / 100}
-              strokeLinecap="round"
-              fill="transparent"
-              className="transition-all duration-1000 ease-linear"
-            />
-          </svg>
-          <div className="absolute flex flex-col items-center">
-            <span className="font-mono text-xl font-bold text-white tracking-tight">
-              {formattedTime}
-            </span>
-            <span className="text-[9px] uppercase font-semibold text-muted tracking-wider">
-              {mode === 'focus' ? 'Deep Work' : 'Break'}
-            </span>
-          </div>
-        </div>
-
-        {/* Controls */}
-        <div className="flex flex-col gap-2">
-          <button
-            onClick={toggleTimer}
-            className={`flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-white shadow-md transition-all ${
-              isRunning
-                ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-600/20'
-                : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20'
-            }`}
-          >
-            {isRunning ? (
-              <>
-                <Pause className="h-3.5 w-3.5" /> Pause
-              </>
-            ) : (
-              <>
-                <Play className="h-3.5 w-3.5 fill-current" /> Starten
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={resetTimer}
-            className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs text-muted hover:text-white bg-[#1A1F2C] hover:bg-white/10 border border-white/5 transition-colors"
-          >
-            <RotateCcw className="h-3 w-3" /> Zurücksetzen
-          </button>
+      <div className="relative mx-auto my-4 flex h-[190px] w-[190px] items-center justify-center">
+        <svg className="absolute inset-0 -rotate-90" viewBox="0 0 190 190" aria-hidden>
+          <circle cx="95" cy="95" r={RADIUS} fill="none" strokeWidth="10" style={{ stroke: 'rgb(var(--line) / 0.1)' }} />
+          <circle
+            cx="95"
+            cy="95"
+            r={RADIUS}
+            fill="none"
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeDasharray={CIRCUMFERENCE}
+            strokeDashoffset={CIRCUMFERENCE * (1 - progress)}
+            className="transition-[stroke-dashoffset] duration-300 ease-linear"
+            style={{ stroke: mode === 'focus' ? 'rgb(var(--accent))' : 'rgb(var(--leaf))' }}
+          />
+        </svg>
+        <div className="text-center" role="timer">
+          <div className="font-display text-[56px] font-bold leading-none text-ink tabular">{formatted}</div>
+          <div className="eyebrow mt-1">{mode === 'focus' ? 'Lernblock' : 'Pause'}</div>
         </div>
       </div>
-    </div>
+
+      <div className="flex items-center justify-center gap-2">
+        <button type="button" onClick={() => switchTo(mode)} className="icon-btn border border-line/15" aria-label="Zurücksetzen" title="Zurücksetzen">
+          <RotateCcw className="h-[18px] w-[18px]" />
+        </button>
+        <button type="button" onClick={isRunning ? pause : start} className="btn-primary h-12 min-w-[150px] text-[16px]">
+          {isRunning ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 fill-current" />}
+          {isRunning ? 'Pausieren' : remainingMs < durationMs ? 'Weiter' : 'Starten'}
+        </button>
+        <button type="button" onClick={complete} className="icon-btn border border-line/15" aria-label="Phase überspringen" title="Phase überspringen">
+          <SkipForward className="h-[18px] w-[18px]" />
+        </button>
+      </div>
+
+      <div className="mt-4 flex justify-center gap-1" role="group" aria-label="Dauer">
+        {PRESETS.map((p, i) => (
+          <button key={p.label} type="button" aria-pressed={presetIndex === i} onClick={() => switchTo('focus', i)} className="tab h-8 px-3 font-mono text-[12px]">
+            {p.label} min
+          </button>
+        ))}
+      </div>
+    </section>
   );
 };
