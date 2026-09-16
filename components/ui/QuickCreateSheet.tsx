@@ -1,10 +1,10 @@
 'use client';
 
 import React from 'react';
-import { Award, Bell, BookOpen, Cake, CreditCard, GraduationCap, Repeat, ShoppingCart, type LucideIcon } from 'lucide-react';
+import { Award, Bell, BookOpen, Cake, CreditCard, GraduationCap, NotebookPen, Repeat, Rocket, ShoppingCart, type LucideIcon } from 'lucide-react';
 import { Modal } from './Modal';
 
-export type QuickKind = 'task' | 'reminder' | 'exam' | 'grade' | 'shopping' | 'transaction' | 'habit' | 'birthday';
+export type QuickKind = 'task' | 'reminder' | 'exam' | 'grade' | 'shopping' | 'transaction' | 'habit' | 'birthday' | 'skill' | 'note';
 
 const OPTIONS: { kind: QuickKind; label: string; hint: string; Icon: LucideIcon }[] = [
   { kind: 'task', label: 'Aufgabe', hint: 'Hausübung, To-do', Icon: BookOpen },
@@ -15,6 +15,8 @@ const OPTIONS: { kind: QuickKind; label: string; hint: string; Icon: LucideIcon 
   { kind: 'transaction', label: 'Buchung', hint: 'Ausgabe, Einnahme', Icon: CreditCard },
   { kind: 'habit', label: 'Routine', hint: 'täglich abhaken', Icon: Repeat },
   { kind: 'birthday', label: 'Geburtstag', hint: 'nie mehr vergessen', Icon: Cake },
+  { kind: 'skill', label: 'Skill', hint: 'will ich lernen', Icon: Rocket },
+  { kind: 'note', label: 'Notiz', hint: 'Gedanke, Idee', Icon: NotebookPen },
 ];
 
 interface QuickCreateSheetProps {

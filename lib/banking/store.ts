@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import type { TransactionKind } from './categorize';
+import { merchantKey } from '@/lib/finance/merchant';
 
 export interface IncomingTransaction {
   /** Stable id used to recognise the same booking on the next sync or re-import. */
@@ -86,6 +87,12 @@ export async function storeTransactions(
   ownIbans: Set<string>
 ) {
   const { fresh, duplicates } = await filterNewTransactions(userId, account.id, rows);
+  const rules = await db.categoryRule.findMany({ where: { userId }, select: { pattern: true, category: true } });
+  const ruleFor = (r: IncomingTransaction) => {
+    if (rules.length === 0) return undefined;
+    const key = merchantKey(r.counterparty, r.title);
+    return rules.find((rule) => key === rule.pattern || key.startsWith(`${rule.pattern} `))?.category;
+  };
 
   const data = fresh.map((r) => {
     const toOwnAccount = r.counterpartyIban ? ownIbans.has(normalizeIban(r.counterpartyIban)) : false;
@@ -97,7 +104,7 @@ export async function storeTransactions(
       externalId: r.externalId,
       title: r.title.slice(0, 120),
       amount: Math.round(r.amount * 100) / 100,
-      category: type === 'transfer' ? 'Umbuchung' : type === 'investment' ? 'Sparen & Anlegen' : r.category,
+      category: type === 'transfer' ? 'Umbuchung' : type === 'investment' ? 'Sparen & Anlegen' : ruleFor(r) ?? r.category,
       type,
       counterparty: r.counterparty?.slice(0, 120) ?? null,
       description: r.description?.slice(0, 500) ?? null,

@@ -4,6 +4,7 @@ import { getCurrentUser, readPreferences, type CurrentUser } from '@/lib/user';
 import { syncWebUntisData, toSafeUntisConfig } from '@/lib/webuntis';
 import { getIcalToken } from '@/lib/auth';
 import type { DashboardSummary } from '@/types';
+import { loadSkills } from '@/lib/skills-db';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -113,6 +114,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     shoppingItems,
     habits,
     birthdays,
+    skills,
   ] = await Promise.all([
     db.task.findMany({
       where: { userId, status: { not: 'archived' } },
@@ -178,6 +180,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       orderBy: { createdAt: 'asc' },
     }),
     db.birthday.findMany({ where: { userId }, orderBy: [{ month: 'asc' }, { day: 'asc' }] }),
+    loadSkills(userId),
   ]);
 
   // Accounts with a bank-reported balance use it; imported accounts sum their bookings.
@@ -265,6 +268,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     shopping: shoppingItems,
     habits: habits.map(({ logs, ...habit }) => ({ ...habit, days: logs.map((l) => l.day) })),
     birthdays,
+    skills,
     untisConfig: toSafeUntisConfig(untisConfig),
     banking: {
       configured:

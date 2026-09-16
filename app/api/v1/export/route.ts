@@ -11,7 +11,7 @@ export async function GET() {
   try {
     const user = await getCurrentUser();
     const where = { userId: user.id };
-    const [subjects, tasks, schedule, reminders, notes, savingsPots, transactions, untisConfig, exams, grades, shopping, habits, birthdays, bankAccounts] = await Promise.all([
+    const [subjects, tasks, schedule, reminders, notes, savingsPots, transactions, untisConfig, exams, grades, shopping, habits, birthdays, bankAccounts, skills, categoryBudgets, categoryRules] = await Promise.all([
       db.subject.findMany({ where }),
       db.task.findMany({ where }),
       db.scheduleBlock.findMany({ where }),
@@ -26,6 +26,9 @@ export async function GET() {
       db.habit.findMany({ where, include: { logs: true } }),
       db.birthday.findMany({ where }),
       db.bankAccount.findMany({ where, select: { id: true, name: true, source: true, iban: true, currency: true, balance: true, includeInBalance: true } }),
+      db.skill.findMany({ where, include: { steps: true, resources: true, sessions: true } }),
+      db.categoryBudget.findMany({ where }),
+      db.categoryRule.findMany({ where }),
     ]);
 
     const stamp = new Date().toISOString().slice(0, 10);
@@ -51,6 +54,9 @@ export async function GET() {
         habits,
         birthdays,
         bankAccounts,
+        skills,
+        categoryBudgets,
+        categoryRules,
         untisConfig: toSafeUntisConfig(untisConfig),
       },
       { headers: { 'Content-Disposition': `attachment; filename="lifetracker-backup-${stamp}.json"` } }

@@ -12,9 +12,22 @@ const EXPENSE_RULES: [RegExp, string][] = [
   ],
   [
     starts(
-      String.raw`eurospar|interspar|spar |spar$|billa|hofer|lidl|penny|mpreis|merkur|unimarkt|nah ?& ?frisch|rewe|edeka|aldi|mcdonald|burger king|subway|kfc|starbucks|mensa|b[äa]ckerei|b[äa]cker|anker|str[öo]ck|der mann|kebap|kebab|d[öo]ner|pizza|lieferando|mjam|foodora|wolt|restaurant|caf[eé]|dm drogerie|bipa`
+      String.raw`mcdonald|burger king|subway|kfc|starbucks|mensa|buffet|kantine|anker|str[öo]ck|der mann|kebap|kebab|d[öo]ner|pizza|lieferando|mjam|foodora|wolt|restaurant|caf[eé]|gasthaus|gasthof|heuriger|sushi|five guys|dunkin|nordsee|vapiano|leberkas|w[üu]rstel|gelato|bubble tea`
     ),
-    'Essen',
+    'Essen gehen',
+  ],
+  [
+    starts(
+      String.raw`eurospar|interspar|spar |spar$|billa|hofer|lidl|penny|mpreis|merkur|unimarkt|nah ?& ?frisch|adeg|rewe|edeka|aldi|b[äa]ckerei|b[äa]cker|supermarkt`
+    ),
+    'Lebensmittel',
+  ],
+  [starts(String.raw`dm drogerie|dm-drogerie|dm fil|bipa|m[üu]ller|douglas|marionnaud|rossmann`), 'Drogerie'],
+  [
+    starts(
+      String.raw`amazon|amzn|media ?markt|saturn|ikea|galaxus|shein|temu|aliexpress|tedi|xxxlutz|m[öo]max|libro|thalia|conrad|cyberport`
+    ),
+    'Shopping',
   ],
   [
     starts(
@@ -24,7 +37,8 @@ const EXPENSE_RULES: [RegExp, string][] = [
   ],
   [starts(String.raw`zalando|h ?& ?m|zara|about you|primark|c ?& ?a|peek|snipes|foot locker|new yorker|bershka|pull ?& ?bear|nike|adidas`), 'Kleidung'],
   [starts(String.raw`kino|cineplexx|steam|playstation|xbox|nintendo|eventim|oeticket|ticketmaster|bowling|therme|museum|konzert|twitch|epic games|riot`), 'Freizeit'],
-  [starts(String.raw`thalia|morawa|libro|pagro|schulbedarf|kopier`), 'Schule'],
+  [starts(String.raw`morawa|pagro|schulbedarf|kopier|schulbuch|elternverein|schulveranstaltung|skikurs|projektwoche`), 'Schule'],
+  [starts(String.raw`geschenk|blumen|fleurop|gutschein`), 'Geschenke'],
   [starts(String.raw`apotheke|arzt|zahnarzt|optik|fielmann|pharmacy`), 'Gesundheit'],
 ];
 
@@ -79,7 +93,10 @@ export function mapFinanzguruCategory(
     return {};
   }
   const table: [RegExp, string][] = [
-    [/lebensmittel|drogerie|restaurant|essen|lieferdienst|gastronomie/, 'Essen'],
+    [/restaurant|lieferdienst|gastronomie|essen gehen|fast ?food|café|cafe/, 'Essen gehen'],
+    [/lebensmittel|supermarkt/, 'Lebensmittel'],
+    [/drogerie|körperpflege/, 'Drogerie'],
+    [/geschenk|spende/, 'Geschenke'],
     [/mobilit|verkehr|auto|tanken|öffentlich|reisen & mobil/, 'Transport'],
     [/wohnen|miete|energie|versicherung|vertr|abo|kommunikation|internet|mobilfunk|rundfunk|streaming|medien/, 'Fixkosten'],
     [/freizeit|hobby|unterhaltung|urlaub|reise|sport/, 'Freizeit'],

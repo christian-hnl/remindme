@@ -15,6 +15,7 @@ import type {
   Reminder,
   SavingsPot,
   ShoppingItem,
+  Skill,
   Task,
   WorkspaceMode,
 } from '@/types';
@@ -40,6 +41,10 @@ import { CashflowRadar } from './wealth/CashflowRadar';
 import { WalletCard } from './wealth/WalletCard';
 import { BankAccountsCard } from './wealth/BankAccountsCard';
 import { ImportModal } from './wealth/ImportModal';
+import { FinanceAnalysis, type TransactionFilter } from './wealth/FinanceAnalysis';
+import { TransactionsBrowser } from './wealth/TransactionsBrowser';
+import { TransactionEditModal, type EditableTransaction } from './wealth/TransactionEditModal';
+import { SkillsHub } from './skills/SkillsHub';
 import { PotDetailsModal } from './wealth/PotDetailsModal';
 import { CreatePotModal } from './wealth/CreatePotModal';
 import { AddTransactionModal } from './wealth/AddTransactionModal';
@@ -50,7 +55,7 @@ import { NotesHub } from './notes/NotesHub';
 import { SettingsModal, type SettingsTab } from './settings/SettingsModal';
 import { ToastProvider, useToast } from './ui/Toast';
 import { QuickCreateSheet, type QuickKind } from './ui/QuickCreateSheet';
-import { Bell, GraduationCap, PiggyBank, Plus } from 'lucide-react';
+import { BarChart3, Bell, GraduationCap, LayoutGrid, ListOrdered, PiggyBank, Plus, Upload } from 'lucide-react';
 import { fireMilestoneGlow } from '@/lib/confetti';
 import { api, errorMessage } from '@/lib/client';
 import { formatEuro, relativeDayLabel } from '@/lib/format';
@@ -65,7 +70,15 @@ const BANK_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type TaskModalState = { task: Task | null; subjectId: string | null } | null;
 /** A form that should open once its view is on screen (from the "Neu" menu). */
-type PendingRequest = { kind: 'reminder' | 'exam' | 'grade' | 'shopping' | 'birthday'; prefill?: Partial<GradePayload> } | null;
+type PendingRequest = { kind: 'reminder' | 'exam' | 'grade' | 'shopping' | 'birthday' | 'skill' | 'note'; prefill?: Partial<GradePayload> } | null;
+type WealthView = 'overview' | 'analysis' | 'transactions';
+const WEALTH_VIEW_KEY = 'lifetracker:wealth-view';
+
+const WEALTH_VIEWS: { id: WealthView; label: string; Icon: typeof Plus }[] = [
+  { id: 'overview', label: 'Überblick', Icon: LayoutGrid },
+  { id: 'analysis', label: 'Analyse', Icon: BarChart3 },
+  { id: 'transactions', label: 'Buchungen', Icon: ListOrdered },
+];
 type ListKey = 'exams' | 'grades' | 'shopping' | 'habits' | 'birthdays' | 'reminders' | 'notes' | 'transactions';
 
 /** Applies a change to a task wherever it appears (task list and lessons); null removes it. */
@@ -132,6 +145,10 @@ function Dashboard({ initialData }: DashboardContainerProps) {
   const [detailsPotId, setDetailsPotId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingRequest>(null);
   const [bankSyncing, setBankSyncing] = useState(false);
+  const [wealthView, setWealthViewState] = useState<WealthView>('overview');
+  const [txFilter, setTxFilter] = useState<TransactionFilter>({});
+  const [editingTx, setEditingTx] = useState<EditableTransaction | null>(null);
+  const [financeVersion, setFinanceVersion] = useState(0);
 
   const detailsPot = data.savingsPots.find((p) => p.id === detailsPotId) ?? null;
   const clearPending = useCallback(() => setPending(null), []);
@@ -158,6 +175,33 @@ function Dashboard({ initialData }: DashboardContainerProps) {
     }
   }, []);
 
+  const setWealthView = useCallback((view: WealthView) => {
+    setWealthViewState(view);
+    try {
+      localStorage.setItem(WEALTH_VIEW_KEY, view);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(WEALTH_VIEW_KEY) as WealthView | null;
+      if (stored && WEALTH_VIEWS.some((v) => v.id === stored)) setWealthViewState(stored);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const openTransactions = useCallback(
+    (filter: TransactionFilter) => {
+      setTxFilter(filter);
+      setActiveMode('wealth');
+      setWealthView('transactions');
+    },
+    [setActiveMode, setWealthView]
+  );
+
   const openSettings = useCallback((tab: SettingsTab = 'profile') => {
     setSettingsTab(tab);
     setIsSettingsOpen(true);
@@ -168,6 +212,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
 
   // ---------------------------------------------------------------- data sync
   const refreshSummary = useCallback(async () => {
+    setFinanceVersion((v) => v + 1);
     try {
       setData(await api<DashboardSummary>('/api/v1/dashboard/summary'));
     } catch (error) {
@@ -237,6 +282,14 @@ function Dashboard({ initialData }: DashboardContainerProps) {
         case 'shopping':
         case 'birthday':
           if (activeMode !== 'life') setActiveMode('life');
+          setPending({ kind });
+          break;
+        case 'skill':
+          if (activeMode !== 'skills') setActiveMode('skills');
+          setPending({ kind });
+          break;
+        case 'note':
+          if (activeMode !== 'notes') setActiveMode('notes');
           setPending({ kind });
           break;
         case 'habit':
@@ -748,6 +801,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
   );
 
   const totalSaved = data.savingsPots.reduce((sum, p) => sum + p.currentAmount, 0);
+  const financeRefreshKey = `${financeVersion}:${data.metrics.totalBalance}:${data.transactions.length}:${data.transactions[0]?.id ?? ''}`;
 
   return (
     <div className="min-h-screen pb-[calc(6.5rem+env(safe-area-inset-bottom))] lg:pb-16">
@@ -900,7 +954,10 @@ function Dashboard({ initialData }: DashboardContainerProps) {
               mode="wealth"
               actions={
                 <>
-                  <button type="button" onClick={() => setIsCreatePotOpen(true)} className="btn-secondary">
+                  <button type="button" onClick={() => setIsImportOpen(true)} className="btn-secondary">
+                    <Upload className="h-4 w-4" /> Import
+                  </button>
+                  <button type="button" onClick={() => setIsCreatePotOpen(true)} className="btn-secondary hidden sm:inline-flex">
                     <PiggyBank className="h-4 w-4" /> Spartopf
                   </button>
                   <button type="button" onClick={() => setIsAddTxOpen(true)} className="btn-primary">
@@ -909,6 +966,42 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 </>
               }
             />
+            <div className="segmented mb-4 grid-cols-3 sm:mb-6 sm:inline-grid" role="tablist" aria-label="Geld-Bereiche">
+              {WEALTH_VIEWS.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={wealthView === id}
+                  aria-pressed={wealthView === id}
+                  onClick={() => {
+                    if (id === 'transactions' && wealthView !== 'transactions') setTxFilter({});
+                    setWealthView(id);
+                  }}
+                  className="segmented-item sm:px-5"
+                >
+                  <Icon className="h-4 w-4" /> {label}
+                </button>
+              ))}
+            </div>
+
+            {wealthView === 'analysis' && (
+              <FinanceAnalysis
+                refreshKey={financeRefreshKey}
+                onChanged={refreshSummary}
+                onShowTransactions={openTransactions}
+                onImport={() => setIsImportOpen(true)}
+                onAddTransaction={() => setIsAddTxOpen(true)}
+              />
+            )}
+
+            {wealthView === 'transactions' && (
+              <div className="mx-auto max-w-3xl">
+                <TransactionsBrowser filter={txFilter} refreshKey={financeRefreshKey} onChanged={refreshSummary} onDelete={handleDeleteTransaction} />
+              </div>
+            )}
+
+            {wealthView === 'overview' && (
             <div className="flex flex-col gap-4 sm:gap-6 lg:grid lg:grid-cols-12 lg:items-start">
               <div className="contents lg:col-span-5 lg:flex lg:flex-col lg:gap-6">
                 <div className="order-1 min-w-0">
@@ -929,6 +1022,21 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     fixedCostsCovered={data.metrics.fixedCostsCovered}
                     onAddTransaction={() => setIsAddTxOpen(true)}
                     onDeleteTransaction={handleDeleteTransaction}
+                    onEditTransaction={(tx) =>
+                      setEditingTx({
+                        id: tx.id,
+                        title: tx.title,
+                        amount: tx.amount,
+                        category: tx.category,
+                        type: tx.type,
+                        isRecurring: tx.isRecurring,
+                        date: tx.transactionDate,
+                        counterparty: tx.counterparty,
+                        description: tx.description,
+                        account: tx.bankAccount?.name,
+                      })
+                    }
+                    onShowAll={() => openTransactions({})}
                   />
                 </div>
               </div>
@@ -975,6 +1083,19 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 </section>
               </div>
             </div>
+            )}
+          </>
+        )}
+
+        {activeMode === 'skills' && (
+          <>
+            <ModeHeader mode="skills" />
+            <SkillsHub
+              skills={data.skills}
+              onSkillsChange={(update) => setData((d) => ({ ...d, skills: update(d.skills) }))}
+              createRequest={pending?.kind === 'skill'}
+              onCreateRequestHandled={clearPending}
+            />
           </>
         )}
 
@@ -988,6 +1109,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
               onAddNote={handleAddNote}
               onUpdateNote={handleUpdateNote}
               onDeleteNote={handleDeleteNote}
+              createRequest={pending?.kind === 'note'}
+              onCreateRequestHandled={clearPending}
             />
           </>
         )}
@@ -1061,6 +1184,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
           refreshSummary();
         }}
       />
+
+      <TransactionEditModal transaction={editingTx} onClose={() => setEditingTx(null)} onSaved={refreshSummary} onDelete={handleDeleteTransaction} />
 
       <ImportModal
         isOpen={isImportOpen}

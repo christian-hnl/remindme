@@ -1,7 +1,7 @@
 export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskStatus = 'backlog' | 'in_progress' | 'done' | 'archived';
 export type TransactionType = 'income' | 'expense' | 'transfer_to_pot' | 'transfer_from_pot' | 'transfer' | 'investment';
-export type WorkspaceMode = 'all' | 'study' | 'life' | 'wealth' | 'notes';
+export type WorkspaceMode = 'all' | 'study' | 'life' | 'wealth' | 'skills' | 'notes';
 export type RepeatPattern = 'none' | 'daily' | 'weekly';
 export type BankSource = 'enablebanking' | 'george' | 'traderepublic' | 'finanzguru' | 'file';
 export type ExamKind = 'schularbeit' | 'test' | 'pruefung' | 'referat' | 'sonstiges';
@@ -192,6 +192,155 @@ export interface Birthday {
   note?: string | null;
 }
 
+// ---------------------------------------------------------------- finance analysis
+
+export type AnalyticsRange = 'month' | 'last-month' | '3m' | '6m' | '12m';
+
+export interface AnalyticsTransaction {
+  id: string;
+  title: string;
+  amount: number;
+  category: string;
+  date: string;
+  account?: string | null;
+  type: TransactionType;
+  isRecurring: boolean;
+  counterparty?: string | null;
+}
+
+export interface CategoryAnalysis {
+  category: string;
+  amount: number;
+  share: number;
+  count: number;
+  previous: number;
+  /** Relative change to the previous period, null without comparison data. */
+  change: number | null;
+  /** Average per month over the last 6 complete months. */
+  avgMonthly: number;
+  /** Amount per month in the selected period. */
+  perMonth: number;
+  /** Last 6 complete months + current month. */
+  trend: number[];
+  budget: number | null;
+  merchants: { name: string; amount: number; count: number }[];
+}
+
+export interface RecurringPayment {
+  key: string;
+  name: string;
+  category: string;
+  type: 'expense' | 'income';
+  amount: number;
+  interval: 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+  monthlyAmount: number;
+  yearlyAmount: number;
+  lastDate: string;
+  nextDate: string;
+  count: number;
+  priceChange: { from: number; to: number } | null;
+}
+
+export interface FinanceInsight {
+  tone: 'good' | 'warn' | 'info';
+  title: string;
+  text: string;
+}
+
+export interface FinanceAnalytics {
+  range: AnalyticsRange;
+  label: string;
+  from: string;
+  to: string;
+  days: number;
+  hasData: boolean;
+  totals: {
+    income: number;
+    expenses: number;
+    invested: number;
+    net: number;
+    savingsRate: number | null;
+    avgPerDay: number;
+    avgPerMonth: number;
+    count: number;
+  };
+  previous: { income: number; expenses: number; net: number };
+  categories: CategoryAnalysis[];
+  incomeCategories: { category: string; amount: number; share: number }[];
+  topExpenses: AnalyticsTransaction[];
+  merchants: { name: string; amount: number; count: number; category: string }[];
+  /** Monday first. */
+  weekdays: { label: string; amount: number; avgPerDay: number }[];
+  monthly: { key: string; label: string; income: number; expenses: number; net: number; isCurrent: boolean }[];
+  food: { total: number; groceries: number; eatingOut: number; perDay: number; share: number; previous: number; topPlaces: { name: string; amount: number; count: number }[] };
+  recurring: RecurringPayment[];
+  recurringMonthly: number;
+  forecast: {
+    balance: number;
+    spentSoFar: number;
+    incomeSoFar: number;
+    projectedExpenses: number;
+    projectedIncome: number;
+    projectedNet: number;
+    endOfMonthBalance: number;
+    dailyPace: number;
+    budget: number;
+    projectedDiscretionary: number;
+    pending: { name: string; amount: number; date: string; type: 'expense' | 'income' }[];
+    avgMonthlyNet: number;
+    points: { label: string; balance: number }[];
+    daysLeft: number;
+  };
+  budgets: { category: string; limit: number }[];
+  insights: FinanceInsight[];
+}
+
+// ---------------------------------------------------------------- skills
+
+export type SkillStatus = 'idea' | 'active' | 'paused' | 'done';
+export type SkillResourceKind = 'video' | 'course' | 'book' | 'app' | 'article' | 'other';
+
+export interface SkillStep {
+  id: string;
+  title: string;
+  isDone: boolean;
+  position: number;
+}
+
+export interface SkillResource {
+  id: string;
+  title: string;
+  url?: string | null;
+  kind: SkillResourceKind;
+  isDone: boolean;
+}
+
+export interface SkillSession {
+  id: string;
+  minutes: number;
+  date: string;
+  note?: string | null;
+}
+
+export interface Skill {
+  id: string;
+  title: string;
+  emoji: string;
+  category: string;
+  status: SkillStatus;
+  why?: string | null;
+  weeklyMinutes: number;
+  targetDate?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  createdAt: string;
+  steps: SkillStep[];
+  resources: SkillResource[];
+  /** Sessions of the last ~12 weeks. */
+  sessions: SkillSession[];
+  totalMinutes: number;
+}
+
 export interface DashboardSummary {
   user: {
     id: string;
@@ -229,6 +378,7 @@ export interface DashboardSummary {
   shopping: ShoppingItem[];
   habits: Habit[];
   birthdays: Birthday[];
+  skills: Skill[];
   untisConfig: WebUntisConfig | null;
   banking: {
     /** Enable Banking credentials are stored (or provided via environment). */

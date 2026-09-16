@@ -54,10 +54,14 @@ const SUBJECTS: [string, string][] = [
 
 const CATEGORY_RULES: [RegExp, string][] = [
   [word('miete|strom|handy|versicherung|netflix|spotify|abo|fitnessstudio|gym'), 'Fixkosten'],
-  [word('döner|bäcker|bäckerei|supermarkt|essen|rewe|edeka|lidl|aldi|penny|mensa|pizza|lebensmittel|einkauf'), 'Lebensmittel'],
-  [word('ticket|bahn|bus|tanken|taxi|uber|zug|öffis?'), 'Transport'],
-  [word('kaffee|kino|bier|bar|club|konzert|party|restaurant'), 'Freizeit'],
-  [word('buch|bücher|kurs|uni|schule|skript'), 'Bildung'],
+  [word('döner|kebab|kebap|mensa|pizza|restaurant|mcdonalds?|burger|kaffee|café|cafe|lieferando|mjam|essen gehen|sushi|eis'), 'Essen gehen'],
+  [word('bäcker|bäckerei|supermarkt|essen|billa|spar|hofer|rewe|edeka|lidl|aldi|penny|lebensmittel|einkauf'), 'Lebensmittel'],
+  [word('ticket|bahn|bus|tanken|taxi|uber|zug|öffis?|klimaticket'), 'Transport'],
+  [word('kino|bier|bar|club|konzert|party|spiel|game|steam'), 'Freizeit'],
+  [word('buch|bücher|kurs|schule|skript|heft|schulsachen'), 'Schule'],
+  [word('shampoo|duschgel|dm|bipa|drogerie'), 'Drogerie'],
+  [word('amazon|hoodie|schuhe|jacke|shirt|hose|kleidung'), 'Kleidung'],
+  [word('geschenk|blumen'), 'Geschenke'],
 ];
 
 const DEPOSIT_WORDS = 'sparen|spare|spart|einzahlen|einzahlung|zurücklegen|zurückgelegt|spartopf|sparschwein';

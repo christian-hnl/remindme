@@ -32,6 +32,9 @@ model User {
   shoppingItems   ShoppingItem[]
   habits          Habit[]
   birthdays       Birthday[]
+  categoryBudgets CategoryBudget[]
+  categoryRules   CategoryRule[]
+  skills          Skill[]
 }
 
 model WebUntisConfig {
@@ -211,6 +214,84 @@ model Birthday {
   year      Int?
   note      String?
   createdAt DateTime @default(now())
+}
+
+/// Monthly spending limit per category.
+model CategoryBudget {
+  id       String @id @default(uuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category String
+  limit    Float
+
+  @@unique([userId, category])
+}
+
+/// Remembered category for a merchant, applied to future imports.
+model CategoryRule {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Normalised merchant key (see lib/finance/merchant.ts)
+  pattern   String
+  category  String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, pattern])
+}
+
+/// Something the user wants to learn.
+model Skill {
+  id            String          @id @default(uuid())
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  emoji         String          @default("🎯")
+  category      String          @default("Sonstiges")
+  /// idea | active | paused | done
+  status        String          @default("idea")
+  why           String?
+  weeklyMinutes Int             @default(60)
+  targetDate    DateTime?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  steps         SkillStep[]
+  resources     SkillResource[]
+  sessions      SkillSession[]
+}
+
+model SkillStep {
+  id        String   @id @default(uuid())
+  skillId   String
+  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  title     String
+  isDone    Boolean  @default(false)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+model SkillResource {
+  id        String   @id @default(uuid())
+  skillId   String
+  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  title     String
+  url       String?
+  /// video | course | book | app | article | other
+  kind      String   @default("other")
+  isDone    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model SkillSession {
+  id      String   @id @default(uuid())
+  skillId String
+  skill   Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  minutes Int
+  date    DateTime @default(now())
+  note    String?
+
+  @@index([skillId, date])
 }
 
 model ScheduleBlock {

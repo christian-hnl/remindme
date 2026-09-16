@@ -1,4 +1,4 @@
-import { GraduationCap, House, ListChecks, NotebookPen, Wallet, type LucideIcon } from 'lucide-react';
+import { GraduationCap, House, ListChecks, NotebookPen, Rocket, Wallet, type LucideIcon } from 'lucide-react';
 import type { WorkspaceMode } from '@/types';
 
 export interface ModeMeta {
@@ -9,7 +9,7 @@ export interface ModeMeta {
   shortcut: string;
 }
 
-export const MODE_ORDER: WorkspaceMode[] = ['all', 'study', 'life', 'wealth', 'notes'];
+export const MODE_ORDER: WorkspaceMode[] = ['all', 'study', 'life', 'wealth', 'skills', 'notes'];
 
 export const MODE_META: Record<WorkspaceMode, ModeMeta> = {
   all: {
@@ -32,14 +32,20 @@ export const MODE_META: Record<WorkspaceMode, ModeMeta> = {
   },
   wealth: {
     label: 'Geld',
-    description: 'Tagesbudget, Konten, Spartöpfe und Buchungen',
+    description: 'Tagesbudget, Analyse, Prognose, Abos und Buchungen',
     Icon: Wallet,
     shortcut: '4',
+  },
+  skills: {
+    label: 'Skills',
+    description: 'Was du lernen willst – Schritte, Material und Lernzeit',
+    Icon: Rocket,
+    shortcut: '5',
   },
   notes: {
     label: 'Notizen',
     description: 'Gedanken, Mitschriften und Ideen – speichert automatisch',
     Icon: NotebookPen,
-    shortcut: '5',
+    shortcut: '6',
   },
 };

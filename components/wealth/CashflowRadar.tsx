@@ -12,6 +12,8 @@ interface CashflowRadarProps {
   fixedCostsCovered: boolean;
   onAddTransaction: () => void;
   onDeleteTransaction: (id: string) => void;
+  onEditTransaction: (tx: Transaction) => void;
+  onShowAll: () => void;
 }
 
 type Filter = 'all' | 'out' | 'in';
@@ -32,6 +34,8 @@ export const CashflowRadar: React.FC<CashflowRadarProps> = ({
   fixedCostsCovered,
   onAddTransaction,
   onDeleteTransaction,
+  onEditTransaction,
+  onShowAll,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
@@ -100,7 +104,7 @@ export const CashflowRadar: React.FC<CashflowRadarProps> = ({
                   >
                     <Icon className="h-4 w-4" />
                   </span>
-                  <span className="min-w-0 flex-1">
+                  <button type="button" onClick={() => onEditTransaction(tx)} className="min-w-0 flex-1 rounded-md text-left">
                     <span className="block truncate text-[15px] font-bold text-ink">{tx.title}</span>
                     <span className="flex items-center gap-1 truncate text-[12px] text-ink-3">
                       {[relativeDayLabel(new Date(tx.transactionDate)), tx.category, tx.bankAccount?.name].filter(Boolean).join(' · ')}
@@ -110,7 +114,7 @@ export const CashflowRadar: React.FC<CashflowRadarProps> = ({
                         </span>
                       )}
                     </span>
-                  </span>
+                  </button>
                   <span
                     className={`flex-shrink-0 font-mono text-[15px] font-medium tabular ${
                       tx.type === 'income' ? 'text-leaf' : neutral ? 'text-ink-2' : 'text-ink'
@@ -135,11 +139,16 @@ export const CashflowRadar: React.FC<CashflowRadarProps> = ({
             {filtered.length === 0 && <li className="py-6 text-center text-[14px] text-ink-3">Keine Buchungen in diesem Filter.</li>}
           </ul>
         )}
-        {filtered.length > COLLAPSED_COUNT && (
-          <button type="button" onClick={() => setExpanded((v) => !v)} className="btn-ghost mb-2 w-full">
-            {expanded ? 'Weniger anzeigen' : `${filtered.length - COLLAPSED_COUNT} weitere anzeigen`}
+        <div className="mb-2 flex gap-2">
+          {filtered.length > COLLAPSED_COUNT && (
+            <button type="button" onClick={() => setExpanded((v) => !v)} className="btn-ghost flex-1">
+              {expanded ? 'Weniger' : `${filtered.length - COLLAPSED_COUNT} weitere`}
+            </button>
+          )}
+          <button type="button" onClick={onShowAll} className="btn-ghost flex-1 text-accent">
+            Alle Buchungen & Suche
           </button>
-        )}
+        </div>
       </div>
     </section>
   );

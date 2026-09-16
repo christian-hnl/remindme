@@ -7,6 +7,7 @@ import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { api, errorMessage } from '@/lib/client';
 import { fromDateInput, parseAmount, toDateInput } from '@/lib/format';
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES, categoryMeta } from '@/lib/finance/categories';
 
 interface AddTransactionModalProps {
   isOpen: boolean;
@@ -15,8 +16,8 @@ interface AddTransactionModalProps {
 }
 
 const CATEGORIES = {
-  expense: ['Essen', 'Freizeit', 'Transport', 'Schule', 'Kleidung', 'Fixkosten', 'Gesundheit', 'Sonstiges'],
-  income: ['Taschengeld', 'Nebenjob', 'Einkommen', 'Geschenk', 'Verkauf', 'Sonstiges'],
+  expense: EXPENSE_CATEGORIES as readonly string[],
+  income: INCOME_CATEGORIES as readonly string[],
 };
 
 export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ isOpen, onClose, onTransactionCreated }) => {
@@ -135,7 +136,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ isOpen
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Kategorie">
             {CATEGORIES[type].map((c) => (
               <button key={c} type="button" aria-pressed={category === c} onClick={() => setCategory(c)} className="tab border-line/15">
-                {c}
+                {categoryMeta(c).emoji} {c}
               </button>
             ))}
           </div>

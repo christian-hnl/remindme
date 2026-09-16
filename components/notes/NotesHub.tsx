@@ -13,6 +13,9 @@ interface NotesHubProps {
   onAddNote: (note: Partial<Note>) => Promise<Note | null>;
   onUpdateNote: (id: string, updates: Partial<Note>) => Promise<void>;
   onDeleteNote: (id: string) => void;
+  /** Creates a note right away, e.g. from the global "Neu" menu. */
+  createRequest?: boolean;
+  onCreateRequestHandled?: () => void;
 }
 
 type Draft = { id: string; title: string; content: string };
@@ -28,7 +31,16 @@ const CATEGORIES = [
   { id: 'Wichtig', label: 'Wichtig' },
 ];
 
-export const NotesHub: React.FC<NotesHubProps> = ({ notes, selectedNoteId, onSelectNote, onAddNote, onUpdateNote, onDeleteNote }) => {
+export const NotesHub: React.FC<NotesHubProps> = ({
+  notes,
+  selectedNoteId,
+  onSelectNote,
+  onAddNote,
+  onUpdateNote,
+  onDeleteNote,
+  createRequest,
+  onCreateRequestHandled,
+}) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -110,6 +122,13 @@ export const NotesHub: React.FC<NotesHubProps> = ({ notes, selectedNoteId, onSel
       setMobileEditor(true);
     }
   };
+
+  useEffect(() => {
+    if (!createRequest) return;
+    onCreateRequestHandled?.();
+    handleCreateNote();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createRequest]);
 
   const handleDelete = () => {
     if (!activeNote) return;

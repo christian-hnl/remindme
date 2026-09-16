@@ -14,6 +14,7 @@ import {
   GraduationCap,
   PiggyBank,
   PlusCircle,
+  Rocket,
   RefreshCw,
   Search,
   Settings,
@@ -135,6 +136,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     { id: 'new-exam', group: 'Neu', label: 'Prüfung', icon: icon(GraduationCap), run: run(() => onQuickCreate('exam')) },
     { id: 'new-grade', group: 'Neu', label: 'Note', icon: icon(Award), run: run(() => onQuickCreate('grade')) },
     { id: 'new-shopping', group: 'Neu', label: 'Einkaufsliste', icon: icon(ShoppingCart), run: run(() => onQuickCreate('shopping')) },
+    { id: 'new-skill', group: 'Neu', label: 'Skill (will ich lernen)', icon: icon(Rocket), run: run(() => onQuickCreate('skill')) },
     ...MODE_ORDER.map((mode) => {
       const { label, Icon, shortcut } = MODE_META[mode];
       return { id: `mode-${mode}`, group: 'Gehe zu', label, hint: shortcut, icon: icon(Icon), run: run(() => setActiveMode(mode)) };
