@@ -45,6 +45,7 @@ import { FinanceAnalysis, type TransactionFilter } from './wealth/FinanceAnalysi
 import { TransactionsBrowser } from './wealth/TransactionsBrowser';
 import { TransactionEditModal, type EditableTransaction } from './wealth/TransactionEditModal';
 import { SkillsHub } from './skills/SkillsHub';
+import { WelcomeCard } from './onboarding/WelcomeCard';
 import { PotDetailsModal } from './wealth/PotDetailsModal';
 import { CreatePotModal } from './wealth/CreatePotModal';
 import { AddTransactionModal } from './wealth/AddTransactionModal';
@@ -483,6 +484,45 @@ function Dashboard({ initialData }: DashboardContainerProps) {
     [optimistic]
   );
 
+  const handleAddExamTopic = useCallback(
+    async (examId: string, title: string) => {
+      try {
+        const topic = await api<Exam['topicItems'][number]>(`/api/v1/exams/${examId}/topics`, { body: { title } });
+        setData((d) => ({ ...d, exams: d.exams.map((e) => (e.id === examId ? { ...e, topicItems: [...e.topicItems, topic] } : e)) }));
+      } catch (error) {
+        toast(errorMessage(error), 'error');
+      }
+    },
+    [toast]
+  );
+
+  const handleToggleExamTopic = useCallback(
+    (examId: string, topicId: string, isDone: boolean) => {
+      setData((d) => ({
+        ...d,
+        exams: d.exams.map((e) =>
+          e.id === examId ? { ...e, topicItems: e.topicItems.map((t) => (t.id === topicId ? { ...t, isDone } : t)) } : e
+        ),
+      }));
+      api(`/api/v1/exams/${examId}/topics/${topicId}`, { method: 'PATCH', body: { isDone } }).catch((error) => {
+        toast(errorMessage(error), 'error');
+        refreshSummary();
+      });
+    },
+    [toast, refreshSummary]
+  );
+
+  const handleDeleteExamTopic = useCallback(
+    (examId: string, topicId: string) => {
+      setData((d) => ({ ...d, exams: d.exams.map((e) => (e.id === examId ? { ...e, topicItems: e.topicItems.filter((t) => t.id !== topicId) } : e)) }));
+      api(`/api/v1/exams/${examId}/topics/${topicId}`, { method: 'DELETE' }).catch((error) => {
+        toast(errorMessage(error), 'error');
+        refreshSummary();
+      });
+    },
+    [toast, refreshSummary]
+  );
+
   const handleEnterGradeForExam = useCallback((exam: Exam) => {
     setPending({
       kind: 'grade',
@@ -793,6 +833,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
       dailyBudgetBaseline={data.metrics.dailyBudgetBaseline}
       totalBalance={data.metrics.totalBalance}
       freeThisMonth={data.metrics.freeThisMonth}
+      monthlyBudget={data.user.monthlyBudget}
+      onSetBudget={() => openSettings('profile')}
       pots={data.savingsPots}
       onOpenWealth={() => setActiveMode('wealth')}
       onAddTransaction={() => setIsAddTxOpen(true)}
@@ -825,6 +867,17 @@ function Dashboard({ initialData }: DashboardContainerProps) {
       <main id="main" className="mx-auto max-w-[1400px] px-3 pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pt-8">
         {activeMode === 'all' && (
           <div className="space-y-4 sm:space-y-6">
+            {!data.user.onboarded && (
+              <WelcomeCard
+                onDone={refreshSummary}
+                onConnectUntis={() => setIsUntisModalOpen(true)}
+                onConnectBank={() => openSettings('banks')}
+                onImport={() => {
+                  setActiveMode('wealth');
+                  setIsImportOpen(true);
+                }}
+              />
+            )}
             <TodayRuler
               schedule={data.schedule}
               tasks={data.tasks}
@@ -880,6 +933,9 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onDelete={handleDeleteExam}
                     onToggleDone={handleToggleExamDone}
                     onEnterGrade={handleEnterGradeForExam}
+                    onAddTopic={handleAddExamTopic}
+                    onToggleTopic={handleToggleExamTopic}
+                    onDeleteTopic={handleDeleteExamTopic}
                   />
                 </div>
                 <div className="order-3 min-w-0">
@@ -1160,6 +1216,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
           toast(message);
           refreshSummary();
         }}
+        onGroupsChanged={refreshSummary}
       />
 
       <AppleSyncModal isOpen={isAppleSyncOpen} onClose={() => setIsAppleSyncOpen(false)} icalToken={data.icalToken} />

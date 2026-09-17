@@ -57,6 +57,28 @@ export function daysUntil(date: Date, now = new Date()) {
   return Math.round((startOfDay(date).getTime() - startOfDay(now).getTime()) / 86_400_000);
 }
 
+/** Guesses the exam kind from Untis lesson text ("2. Schularbeit" → schularbeit). */
+export function guessExamKindFromText(text: string): ExamKind {
+  const t = text.toLowerCase();
+  if (/schularbeit|\bsa\b/.test(t)) return 'schularbeit';
+  if (/test|\bko\b|kurztest/.test(t)) return 'test';
+  if (/referat|pr[äa]sentation/.test(t)) return 'referat';
+  if (/pr[üu]fung|klausur/.test(t)) return 'pruefung';
+  return 'sonstiges';
+}
+
+/** A lesson counts as "current" up to this many minutes after it officially ends. */
+export const LESSON_GRACE_MIN = 5;
+/** A lesson counts as "coming up" starting this many minutes before it starts. */
+export const LESSON_LEAD_MIN = 10;
+
+/** 'current' from start to end+grace, 'upcoming' from start-lead to start, else null. */
+export function lessonPhase(startMin: number, endMin: number, minutesNow: number): 'current' | 'upcoming' | null {
+  if (minutesNow >= startMin && minutesNow < endMin + LESSON_GRACE_MIN) return 'current';
+  if (minutesNow >= startMin - LESSON_LEAD_MIN && minutesNow < startMin) return 'upcoming';
+  return null;
+}
+
 export function countdownLabel(days: number) {
   if (days === 0) return 'heute';
   if (days === 1) return 'morgen';

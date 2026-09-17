@@ -1,89 +1,16 @@
 import { format } from 'date-fns';
 import { db } from '@/lib/db';
-import { getCurrentUser, readPreferences, type CurrentUser } from '@/lib/user';
-import { syncWebUntisData, toSafeUntisConfig } from '@/lib/webuntis';
+import { getCurrentUser, readPreferences } from '@/lib/user';
+import { filterByGroups, findParallelSlots, lessonKey, parseRotations, parseStringList, rotationHiddenKeys, toSafeUntisConfig } from '@/lib/webuntis';
 import { getIcalToken } from '@/lib/auth';
 import type { DashboardSummary } from '@/types';
 import { loadSkills } from '@/lib/skills-db';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/**
- * Seeds demo reminders, notes and the demo timetable exactly once per user.
- * A flag in preferences prevents deleted starter content from reappearing.
- */
-async function ensureStarterContent(user: CurrentUser) {
-  const prefs = readPreferences(user);
-  if (prefs.starterContentSeeded) return;
-
-  const [untisConfig, reminderCount, notesCount] = await Promise.all([
-    db.webUntisConfig.findUnique({ where: { userId: user.id } }),
-    db.reminder.count({ where: { userId: user.id } }),
-    db.note.count({ where: { userId: user.id } }),
-  ]);
-
-  if (!untisConfig) {
-    try {
-      await syncWebUntisData(user.id);
-    } catch (error) {
-      console.error('Initial WebUntis demo sync failed:', error);
-    }
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  if (reminderCount === 0) {
-    await db.reminder.createMany({
-      data: [
-        {
-          userId: user.id,
-          title: 'Bescheid sagen wegen Treffen am Wochenende',
-          personName: 'Mama',
-          reminderType: 'say_to_person',
-          hasDueDate: false,
-          category: 'Person',
-          icon: 'user',
-        },
-        {
-          userId: user.id,
-          title: 'Wäsche rausbringen / aufhängen',
-          reminderType: 'action',
-          hasDueDate: true,
-          dueTime: '18:30',
-          dueDate: today,
-          category: 'Haushalt',
-          icon: 'shirt',
-          repeatPattern: 'weekly',
-        },
-      ],
-    });
-  }
-
-  if (notesCount === 0) {
-    await db.note.createMany({
-      data: [
-        {
-          userId: user.id,
-          title: '💡 Ideen & Gedanken',
-          content: '1. Mehr Zeit für fokussierte Lernblöcke vor 12 Uhr einplanen.\n2. Wochenende für Erholung und Freunde freihalten.',
-          category: 'Gedanken',
-          isPinned: true,
-          colorHex: '#6366F1',
-        },
-      ],
-    });
-  }
-
-  await db.user.update({
-    where: { id: user.id },
-    data: { preferences: JSON.stringify({ ...prefs, starterContentSeeded: true }) },
-  });
-}
-
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   const user = await getCurrentUser();
-  await ensureStarterContent(user);
+  const prefs = readPreferences(user);
   const userId = user.id;
 
   const now = new Date();
@@ -97,7 +24,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     tasks,
     savingsPots,
     transactions,
-    schedule,
+    rawSchedule,
     subjects,
     reminders,
     notes,
@@ -166,7 +93,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     db.bankingConfig.findUnique({ where: { userId }, select: { appId: true, privateKey: true } }),
     db.exam.findMany({
       where: { userId, OR: [{ isDone: false }, { date: { gte: new Date(now.getTime() - 60 * 86_400_000) } }] },
-      include: { subject: true },
+      include: { subject: true, topicItems: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
       orderBy: { date: 'asc' },
     }),
     db.grade.findMany({ where: { userId }, include: { subject: true }, orderBy: { date: 'desc' } }),
@@ -227,6 +154,50 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     fixedCostsMonthly += Math.abs(t.amount);
   }
 
+  // Hide the parallel groups/Schwerpunkte the user isn't in (see WebUntisConfig.selectedGroups)
+  // and the parallel lessons they marked as "not mine".
+  const selectedGroups = parseStringList(untisConfig?.selectedGroups);
+  const hiddenLessons = parseStringList(untisConfig?.hiddenLessons);
+  const rotations = parseRotations(untisConfig?.rotatingLessons);
+  const schedule = filterByGroups(rawSchedule, selectedGroups, hiddenLessons, rotations, now);
+  // Keys hidden this week only because of a weekly rotation – shown differently in the settings.
+  const rotatedAway = new Set(rotationHiddenKeys(rotations, now));
+  const visibleKeys = new Set(schedule.map(lessonKey));
+
+  // Every group tag in the timetable (before filtering), so the settings can offer all of them.
+  // Tags like "RE_ClusterA1" only make sense next to their subject, so collect those too.
+  const groupInfo = new Map<string, { count: number; subjects: Set<string> }>();
+  for (const block of rawSchedule) {
+    if (!block.studentGroup) continue;
+    const entry = groupInfo.get(block.studentGroup) ?? { count: 0, subjects: new Set<string>() };
+    entry.count += 1;
+    entry.subjects.add(block.subject?.name ?? block.subjectCode ?? block.title);
+    groupInfo.set(block.studentGroup, entry);
+  }
+  const availableGroups = [...groupInfo.entries()]
+    .map(([tag, { count, subjects }]) => ({ tag, count, subjects: [...subjects] }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'de'));
+
+  // Slots with parallel lessons, so the settings can ask which half of the class the user is in.
+  const parallelSlots = findParallelSlots(rawSchedule).map((slot) => ({
+    day: slot.day,
+    startTime: slot.startTime,
+    endTime: slot.endTime,
+    lessons: slot.lessons.map((lesson) => ({
+      key: lessonKey(lesson),
+      subjectCode: lesson.subjectCode ?? '',
+      subjectName: lesson.subject?.name ?? lesson.title,
+      teacher: lesson.teacher,
+      room: lesson.room,
+      studentGroup: lesson.studentGroup,
+      colorHex: lesson.colorHex,
+      // Whatever rule removed it – if it isn't in the filtered plan, it isn't shown.
+      hidden: !visibleKeys.has(lessonKey(lesson)),
+      /** Hidden only because another lesson has this week's turn. */
+      rotatedAway: rotatedAway.has(lessonKey(lesson)),
+    })),
+  }));
+
   const openTasks = tasks.filter((t) => t.status !== 'done');
   const overdueTasksCount = openTasks.filter((t) => t.dueDate < now).length;
   const urgentTasksCount = openTasks.filter((t) => t.priority === 'urgent' || t.priority === 'high' || t.dueDate < now).length;
@@ -241,6 +212,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       email: user.email,
       monthlyBudget,
       startingBalance: user.startingBalance,
+      onboarded: !!user.displayName || prefs.onboardingDone === true,
     },
     metrics: {
       totalBalance,
@@ -269,7 +241,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     habits: habits.map(({ logs, ...habit }) => ({ ...habit, days: logs.map((l) => l.day) })),
     birthdays,
     skills,
-    untisConfig: toSafeUntisConfig(untisConfig),
+    untisConfig: untisConfig ? { ...toSafeUntisConfig(untisConfig)!, availableGroups, parallelSlots } : null,
     banking: {
       configured:
         !!(process.env['ENABLE_BANKING_APP_ID'] && process.env['ENABLE_BANKING_PRIVATE_KEY']) ||

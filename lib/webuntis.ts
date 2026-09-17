@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { colorForName, findScheduleBlockId } from '@/lib/tasks';
+import { guessExamKindFromText } from '@/lib/school';
 
 import { DEMO_DEFAULTS, DEMO_SCHOOL } from '@/lib/untis-defaults';
 
@@ -12,6 +13,7 @@ export interface WebUntisSyncResult {
   schoolName: string;
   syncedLessonsCount: number;
   syncedHomeworkCount: number;
+  syncedExamsCount: number;
   message: string;
   source: UntisSource;
 }
@@ -23,6 +25,7 @@ export interface UntisTestResult {
 }
 
 interface LessonInput {
+  date: Date;
   dayOfWeek: number;
   startTime: string;
   endTime: string;
@@ -34,6 +37,10 @@ interface LessonInput {
   substitutionNote: string | null;
   isCancelled: boolean;
   externalUntisId: string;
+  /** Untis "sg" (student group), or a fallback tag so parallel same-subject lessons stay apart. */
+  studentGroup: string | null;
+  /** Untis lstype "ex" – an exam period. */
+  isExam: boolean;
 }
 
 interface HomeworkInput {
@@ -89,6 +96,8 @@ function mergeDoubleLessons(lessons: LessonInput[]): LessonInput[] {
       prev.subjectCode === lesson.subjectCode &&
       prev.room === lesson.room &&
       prev.isCancelled === lesson.isCancelled &&
+      prev.studentGroup === lesson.studentGroup &&
+      prev.isExam === lesson.isExam &&
       toMinutes(lesson.startTime) - toMinutes(prev.endTime) <= 15 &&
       toMinutes(lesson.startTime) >= toMinutes(prev.startTime)
     ) {
@@ -199,6 +208,10 @@ interface UntisLesson {
   su?: UntisElementRef[];
   ro?: UntisElementRef[];
   te?: UntisElementRef[];
+  /** Student group ("Gruppe 1" splits etc.), when the school tags it in Untis. */
+  sg?: string;
+  /** ls = normal lesson, ex = exam; other values (oh, sb, bs) are treated as normal. */
+  lstype?: 'ls' | 'ex' | 'oh' | 'sb' | 'bs';
 }
 
 export type TimetableScope = 'personal' | 'class';
@@ -237,6 +250,8 @@ async function fetchApiLessons(
             startDate: toUntisDate(monday),
             endDate: toUntisDate(friday),
             showLsText: true,
+            // Without this WebUntis omits "sg" – the tag that tells parallel groups apart.
+            showStudentgroup: true,
             showSubstText: true,
             showInfo: true,
             roomFields: ['name', 'longname'],
@@ -261,7 +276,14 @@ async function fetchApiLessons(
     const code = (subject?.name || lesson.lstext || 'UNT').trim();
     const name = subject?.longname || subject?.name || lesson.lstext || 'Unterricht';
     const startTime = fromUntisTime(lesson.startTime);
-    const key = `${lesson.date}-${startTime}-${code}`;
+    const room = lesson.ro?.map((r) => r.name).filter(Boolean).join(', ') || null;
+    const teacher = lesson.te?.map((t) => t.longname || t.name).filter(Boolean).join(', ') || null;
+    // Untis tags real group splits with "sg"; without it, two parallel lessons of the same
+    // subject at the same time only differ by teacher or room – use that as a fallback tag so
+    // both survive instead of one silently overwriting the other below.
+    const studentGroup = lesson.sg?.trim() || null;
+    const isExam = lesson.lstype === 'ex';
+    const key = `${lesson.date}-${startTime}-${code}-${studentGroup ?? teacher ?? room ?? lesson.id}`;
     if (unique.has(key)) continue;
 
     const roomChange = lesson.ro?.find((r) => r.orgname);
@@ -276,20 +298,86 @@ async function fetchApiLessons(
     ].filter(Boolean);
 
     unique.set(key, {
+      date: fromUntisDate(lesson.date),
       dayOfWeek: isoWeekday(fromUntisDate(lesson.date)),
       startTime,
       endTime: fromUntisTime(lesson.endTime),
-      title: name,
+      title: isExam && lesson.lstext ? lesson.lstext.trim() : name,
       subjectCode: code,
       subjectName: name,
-      room: lesson.ro?.map((r) => r.name).filter(Boolean).join(', ') || null,
-      teacher: lesson.te?.map((t) => t.longname || t.name).filter(Boolean).join(', ') || null,
+      room,
+      teacher,
       substitutionNote: notes.length ? notes.join(' · ') : null,
       isCancelled,
       externalUntisId: `untis-${lesson.id}-${lesson.date}`,
+      studentGroup,
+      isExam,
     });
   }
   return { lessons: mergeDoubleLessons(Array.from(unique.values())), usedScope };
+}
+
+interface ExamInput {
+  externalUntisId: string;
+  subjectCode: string;
+  title: string;
+  date: Date;
+  note: string | null;
+  /** Grade WebUntis already published for this exam, if any. */
+  grade: string | null;
+}
+
+/**
+ * Announced exams (Schularbeiten, Tests) come from the REST API – schools enter them there,
+ * not as timetable entries. Exams assigned to specific students are skipped unless they're ours.
+ */
+async function fetchApiExams(
+  server: string,
+  school: string,
+  sessionId: string,
+  personId: number,
+  from: Date,
+  to: Date
+): Promise<ExamInput[]> {
+  const url = `https://${normalizeServer(server)}/WebUntis/api/exams?startDate=${toUntisDate(from)}&endDate=${toUntisDate(to)}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Cookie: `JSESSIONID=${sessionId}; schoolname="_${Buffer.from(school).toString('base64')}"`,
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const exams: any[] = json?.data?.exams ?? [];
+
+    return exams
+      .filter((exam) => {
+        const assigned: any[] = exam.assignedStudents ?? [];
+        return assigned.length === 0 || assigned.some((s) => Number(s?.id) === personId);
+      })
+      .map((exam) => {
+        const date = fromUntisDate(Number(exam.examDate));
+        const start = Number(exam.startTime);
+        date.setHours(Number.isFinite(start) ? Math.floor(start / 100) : 8, Number.isFinite(start) ? start % 100 : 0, 0, 0);
+        const subjectCode = String(exam.subject ?? '').trim();
+        const name = String(exam.name ?? '').trim();
+        return {
+          // The API reports id 0 for every exam, so build a stable key ourselves.
+          externalUntisId: `untis-exam-${exam.examDate}-${exam.startTime}-${subjectCode}`,
+          subjectCode,
+          title: name || `${subjectCode} ${String(exam.examType ?? '').includes('SA') ? 'Schularbeit' : 'Test'}`.trim(),
+          date,
+          note: [String(exam.text ?? '').trim(), (exam.rooms ?? []).join(', '), (exam.teachers ?? []).join(', ')].filter(Boolean).join(' · ') || null,
+          grade: String(exam.grade ?? '').trim() || null,
+        };
+      });
+  } catch (error) {
+    console.warn('WebUntis exam fetch failed:', error);
+    return [];
+  }
 }
 
 /** Homework lives in the WebUntis REST API, which accepts the JSON-RPC session cookie. */
@@ -441,6 +529,7 @@ function icalEventsToLessons(events: IcalEvent[], reference = new Date()): Lesso
     const code = summary.split(/[\s,/]+/)[0].slice(0, 10);
     const isCancelled = e.status === 'CANCELLED';
     unique.set(key, {
+      date: start,
       dayOfWeek: isoWeekday(start),
       startTime,
       endTime: `${pad(end.getHours())}:${pad(end.getMinutes())}`,
@@ -452,6 +541,8 @@ function icalEventsToLessons(events: IcalEvent[], reference = new Date()): Lesso
       substitutionNote: isCancelled ? 'Entfällt' : null,
       isCancelled,
       externalUntisId: `untis-ical-${e.uid ?? key}`,
+      studentGroup: null,
+      isExam: false,
     });
   }
   return mergeDoubleLessons(Array.from(unique.values()));
@@ -494,19 +585,27 @@ const DEMO_LESSONS: [number, string, string, string, string, string, string, str
 ];
 
 function demoLessons(): LessonInput[] {
-  return DEMO_LESSONS.map(([day, start, end, title, code, room, teacher, note], idx) => ({
-    dayOfWeek: day,
-    startTime: start,
-    endTime: end,
-    title,
-    subjectCode: code,
-    subjectName: DEMO_SUBJECTS[code].name,
-    room,
-    teacher,
-    substitutionNote: note ?? null,
-    isCancelled: false,
-    externalUntisId: `untis-demo-${idx + 1}`,
-  }));
+  const { monday } = getSchoolWeek();
+  return DEMO_LESSONS.map(([day, start, end, title, code, room, teacher, note], idx) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + (day - 1));
+    return {
+      date,
+      dayOfWeek: day,
+      startTime: start,
+      endTime: end,
+      title,
+      subjectCode: code,
+      subjectName: DEMO_SUBJECTS[code].name,
+      room,
+      teacher,
+      substitutionNote: note ?? null,
+      isCancelled: false,
+      externalUntisId: `untis-demo-${idx + 1}`,
+      studentGroup: null,
+      isExam: false,
+    };
+  });
 }
 
 function demoHomework(): HomeworkInput[] {
@@ -549,10 +648,174 @@ function demoHomework(): HomeworkInput[] {
 // ---------------------------------------------------------------------------
 
 /** Config as sent to the browser: never includes the stored password. */
-export function toSafeUntisConfig<T extends { password: string | null; userId: string }>(config: T | null) {
+export function parseStringList(value: string | null | undefined): string[] {
+  try {
+    const parsed = JSON.parse(value ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    // ignore malformed data, fall back to no filter
+    return [];
+  }
+}
+
+export function toSafeUntisConfig<
+  T extends { password: string | null; userId: string; selectedGroups: string; hiddenLessons: string; rotatingLessons: string },
+>(config: T | null) {
   if (!config) return null;
-  const { password, userId: _userId, ...rest } = config;
-  return { ...rest, hasPassword: !!password };
+  const { password, userId: _userId, selectedGroups, hiddenLessons, rotatingLessons, ...rest } = config;
+  return {
+    ...rest,
+    hasPassword: !!password,
+    selectedGroups: parseStringList(selectedGroups),
+    hiddenLessons: parseStringList(hiddenLessons),
+    rotatingLessons: parseRotations(rotatingLessons),
+  };
+}
+
+interface FilterableLesson {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  subjectCode?: string | null;
+  studentGroup?: string | null;
+}
+
+/**
+ * Identifies a lesson across syncs (block ids are recreated on every sync). Day, start time,
+ * subject and group stay stable as long as the timetable itself doesn't change.
+ */
+export function lessonKey(lesson: FilterableLesson) {
+  return `${lesson.dayOfWeek}|${lesson.startTime}|${lesson.subjectCode ?? ''}|${lesson.studentGroup ?? ''}`;
+}
+
+/** A slot that alternates week by week, e.g. one week Weixlbaum, the next Schreiber. */
+export interface LessonRotation {
+  /** Lesson keys taking turns, in rotation order. */
+  keys: string[];
+  /** Monday (yyyy-MM-dd) of the week in which anchorKey was the lesson that took place. */
+  anchorMonday: string;
+  anchorKey: string;
+}
+
+export function parseRotations(value: string | null | undefined): LessonRotation[] {
+  try {
+    const parsed = JSON.parse(value ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (r): r is LessonRotation =>
+        !!r &&
+        Array.isArray(r.keys) &&
+        r.keys.length > 1 &&
+        r.keys.every((k: unknown) => typeof k === 'string') &&
+        typeof r.anchorMonday === 'string' &&
+        typeof r.anchorKey === 'string'
+    );
+  } catch {
+    return [];
+  }
+}
+
+const mondayOf = (date: Date) => {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() - ((d.getDay() || 7) - 1));
+  return d;
+};
+
+/** Lesson keys of rotating slots that are not on this week's turn. */
+export function rotationHiddenKeys(rotations: LessonRotation[], reference = new Date()): string[] {
+  const thisMonday = mondayOf(reference);
+  const hidden: string[] = [];
+  for (const rotation of rotations) {
+    const anchor = mondayOf(new Date(`${rotation.anchorMonday}T12:00:00`));
+    if (Number.isNaN(anchor.getTime())) continue;
+    const weeks = Math.round((thisMonday.getTime() - anchor.getTime()) / (7 * 86_400_000));
+    const start = Math.max(0, rotation.keys.indexOf(rotation.anchorKey));
+    const active = rotation.keys[(((start + weeks) % rotation.keys.length) + rotation.keys.length) % rotation.keys.length];
+    for (const key of rotation.keys) if (key !== active) hidden.push(key);
+  }
+  return hidden;
+}
+
+/**
+ * Keeps only the lessons the user actually attends:
+ * - tagged lessons of a group they aren't in are dropped (Gruppe 1/2, Religion, Schwerpunkt),
+ * - lessons they explicitly marked as "not mine" for parallel slots WebUntis leaves untagged,
+ * - and for slots that alternate weekly, everything except this week's turn.
+ */
+export function filterByGroups<T extends FilterableLesson>(
+  schedule: T[],
+  selectedGroups: string[],
+  hiddenLessons: string[] = [],
+  rotations: LessonRotation[] = [],
+  reference = new Date()
+): T[] {
+  const hidden = new Set(hiddenLessons);
+
+  // Weekly rotations only kick in while both variants are actually in the week's data. WebUntis
+  // often delivers just the lesson that really takes place – then there is nothing to hide, and
+  // hiding by turn would wrongly empty the slot.
+  const rotationHidden = rotationHiddenKeys(rotations, reference);
+  for (const rotation of rotations) {
+    const present = schedule.filter((l) => rotation.keys.includes(lessonKey(l)));
+    if (present.length <= 1) continue;
+    for (const key of rotationHidden) if (rotation.keys.includes(key)) hidden.add(key);
+  }
+
+  // If one lesson of a parallel slot carries a group of the user's, the lessons running against
+  // it can't be theirs – not even untagged ones. Saves picking those slots by hand. Slots the
+  // user decided themselves (fixed choice or weekly rotation) are left alone.
+  if (selectedGroups.length > 0) {
+    const decided = new Set([...hiddenLessons, ...rotations.flatMap((r) => r.keys)]);
+    for (const slot of findParallelSlots(schedule)) {
+      const keys = slot.lessons.map(lessonKey);
+      if (keys.some((k) => decided.has(k))) continue;
+      if (!slot.lessons.some((l) => l.studentGroup && selectedGroups.includes(l.studentGroup))) continue;
+      for (const lesson of slot.lessons) {
+        if (!lesson.studentGroup || !selectedGroups.includes(lesson.studentGroup)) hidden.add(lessonKey(lesson));
+      }
+    }
+  }
+
+  return schedule.filter((b) => {
+    if (hidden.has(lessonKey(b))) return false;
+    if (selectedGroups.length === 0 || !b.studentGroup) return true;
+    return selectedGroups.includes(b.studentGroup);
+  });
+}
+
+/** Overlapping lessons of the same day – the slots where the user has to pick their half. */
+export function findParallelSlots<T extends FilterableLesson>(schedule: T[]) {
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const byDay = new Map<number, T[]>();
+  for (const b of schedule) byDay.set(b.dayOfWeek, [...(byDay.get(b.dayOfWeek) ?? []), b]);
+
+  const slots: { day: number; startTime: string; endTime: string; lessons: T[] }[] = [];
+  for (const [day, lessons] of byDay) {
+    const sorted = [...lessons].sort((a, b) => toMin(a.startTime) - toMin(b.startTime));
+    let cluster: T[] = [];
+    let clusterEnd = -1;
+    const flush = () => {
+      if (cluster.length > 1) {
+        slots.push({
+          day,
+          startTime: cluster[0].startTime,
+          endTime: cluster.reduce((latest, l) => (toMin(l.endTime) > toMin(latest) ? l.endTime : latest), cluster[0].endTime),
+          lessons: cluster,
+        });
+      }
+      cluster = [];
+    };
+    for (const lesson of sorted) {
+      if (cluster.length > 0 && toMin(lesson.startTime) >= clusterEnd) flush();
+      cluster.push(lesson);
+      clusterEnd = Math.max(clusterEnd, toMin(lesson.endTime));
+    }
+    flush();
+  }
+  return slots.sort((a, b) => a.day - b.day || toMin(a.startTime) - toMin(b.startTime));
 }
 
 export async function testUntisConnection(input: {
@@ -585,16 +848,95 @@ export async function testUntisConnection(input: {
   }
 }
 
+export interface WeekLesson {
+  id: string;
+  title: string;
+  subjectCode: string;
+  subjectId: string | null;
+  dayOfWeek: number;
+  date: string;
+  startTime: string;
+  endTime: string;
+  room: string | null;
+  teacher: string | null;
+  colorHex: string;
+  isCancelled: boolean;
+  substitutionNote: string | null;
+  studentGroup: string | null;
+  isExam: boolean;
+}
+
+/**
+ * Loads any week straight from WebUntis for browsing back and forth, without touching the
+ * stored timetable. The user's group filters apply, and weekly rotations are resolved for
+ * exactly that week – so a week in the future shows the teacher whose turn it will be.
+ */
+export async function fetchWeekForUser(userId: string, monday: Date): Promise<{ lessons: WeekLesson[]; schoolName: string }> {
+  const config = await db.webUntisConfig.findUnique({ where: { userId } });
+  if (!config) throw new Error('WebUntis ist noch nicht eingerichtet.');
+  if (config.school === DEMO_SCHOOL || !config.password) {
+    throw new Error('Andere Wochen können nur mit einer echten WebUntis-Anmeldung geladen werden.');
+  }
+
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+
+  const session = await login(config.server, config.school, config.username, config.password);
+  let lessons: LessonInput[];
+  try {
+    const scope: TimetableScope = config.timetableScope === 'class' ? 'class' : 'personal';
+    lessons = (await fetchApiLessons(config.server, config.school, session, monday, friday, scope)).lessons;
+  } finally {
+    await logout(config.server, config.school, session.sessionId);
+  }
+
+  const filtered = filterByGroups(
+    lessons,
+    parseStringList(config.selectedGroups),
+    parseStringList(config.hiddenLessons),
+    parseRotations(config.rotatingLessons),
+    monday
+  );
+
+  // Reuse the stored subject colours so a browsed week looks like the current one.
+  const subjects = await db.subject.findMany({ where: { userId }, select: { id: true, name: true, untisCode: true, colorHex: true } });
+  const subjectFor = (code: string, name: string) =>
+    subjects.find((s) => s.untisCode?.toLowerCase() === code.trim().toLowerCase()) ??
+    subjects.find((s) => s.name.toLowerCase() === name.trim().toLowerCase());
+
+  return {
+    schoolName: config.schoolName,
+    lessons: filtered.map((lesson) => {
+      const subject = subjectFor(lesson.subjectCode, lesson.subjectName);
+      return {
+        id: lesson.externalUntisId,
+        title: lesson.title,
+        subjectCode: lesson.subjectCode,
+        subjectId: subject?.id ?? null,
+        dayOfWeek: lesson.dayOfWeek,
+        date: lesson.date.toISOString(),
+        startTime: lesson.startTime,
+        endTime: lesson.endTime,
+        room: lesson.room,
+        teacher: lesson.teacher,
+        colorHex: subject?.colorHex ?? colorForName(lesson.subjectCode),
+        isCancelled: lesson.isCancelled,
+        substitutionNote: lesson.substitutionNote,
+        studentGroup: lesson.studentGroup,
+        isExam: lesson.isExam,
+      };
+    }),
+  };
+}
+
 export async function syncWebUntisData(userId: string): Promise<WebUntisSyncResult> {
-  const config = await db.webUntisConfig.upsert({
-    where: { userId },
-    update: {},
-    create: { userId, ...DEMO_DEFAULTS },
-  });
+  const config = await db.webUntisConfig.findUnique({ where: { userId } });
+  if (!config) throw new Error('WebUntis ist noch nicht eingerichtet – trag zuerst deine Schule und Zugangsdaten ein.');
 
   let source: UntisSource;
   let lessons: LessonInput[];
   let homework: HomeworkInput[] = [];
+  let announcedExams: ExamInput[] = [];
   let usedScope: TimetableScope | null = null;
 
   try {
@@ -610,6 +952,10 @@ export async function syncWebUntisData(userId: string): Promise<WebUntisSyncResu
         const until = new Date();
         until.setDate(until.getDate() + 21);
         homework = await fetchApiHomework(config.server, config.school, session.sessionId, new Date(), until);
+        // Exams are announced much further ahead than homework.
+        const examsUntil = new Date();
+        examsUntil.setDate(examsUntil.getDate() + 120);
+        announcedExams = await fetchApiExams(config.server, config.school, session.sessionId, session.personId, monday, examsUntil);
       } finally {
         await logout(config.server, config.school, session.sessionId);
       }
@@ -681,10 +1027,55 @@ export async function syncWebUntisData(userId: string): Promise<WebUntisSyncResu
           isCancelled: lesson.isCancelled,
           substitutionNote: lesson.substitutionNote,
           externalUntisId: lesson.externalUntisId,
+          studentGroup: lesson.studentGroup,
+          isExam: lesson.isExam,
         };
       }),
     }),
   ]);
+
+  // Exams: from the announcement API plus any timetable entry flagged as an exam. Matched by
+  // externalUntisId so a re-sync updates the same entry (dates move) instead of duplicating it.
+  // Exams the user deleted stay deleted as long as WebUntis keeps reporting the same id.
+  const examInputs: ExamInput[] = [
+    ...announcedExams,
+    ...lessons
+      .filter((l) => l.isExam)
+      .map((l) => ({
+        externalUntisId: l.externalUntisId,
+        subjectCode: l.subjectCode,
+        title: l.title && l.title !== l.subjectName ? l.title : `${l.subjectName} – Prüfung`,
+        date: l.date,
+        note: l.room,
+        grade: null,
+      })),
+  ];
+
+  let examCount = 0;
+  for (const input of examInputs) {
+    const subject = subjectByCode.get(input.subjectCode) ?? findSubject(input.subjectCode);
+    const existing = await db.exam.findFirst({ where: { userId, externalUntisId: input.externalUntisId } });
+    if (existing) {
+      await db.exam.update({
+        where: { id: existing.id },
+        data: { date: input.date, subjectId: subject?.id ?? existing.subjectId },
+      });
+    } else {
+      await db.exam.create({
+        data: {
+          userId,
+          subjectId: subject?.id ?? null,
+          title: input.title,
+          kind: guessExamKindFromText(input.title),
+          date: input.date,
+          // "Stoff" stays empty – that field belongs to the user's own checklist.
+          isUntisSync: true,
+          externalUntisId: input.externalUntisId,
+        },
+      });
+      examCount++;
+    }
+  }
 
   let homeworkCount = 0;
   for (const hw of homework) {
@@ -729,11 +1120,14 @@ export async function syncWebUntisData(userId: string): Promise<WebUntisSyncResu
     schoolName: config.schoolName,
     syncedLessonsCount: lessons.length,
     syncedHomeworkCount: homeworkCount,
+    syncedExamsCount: examCount,
     source,
     message:
       lessons.length === 0
         ? `${sourceLabel}: Keine Unterrichtsstunden in dieser Woche gefunden.`
-        : `${sourceLabel} synchronisiert: ${lessons.length} Stunden${homeworkCount ? ` & ${homeworkCount} neue Hausaufgaben` : ''} übernommen.${
+        : `${sourceLabel} synchronisiert: ${lessons.length} Stunden${homeworkCount ? ` & ${homeworkCount} neue Hausaufgaben` : ''}${
+            examCount ? ` & ${examCount} neue Prüfungen erkannt` : ''
+          } übernommen.${
             usedScope && usedScope !== config.timetableScope
               ? usedScope === 'class'
                 ? ' Dir sind in WebUntis keine eigenen Stunden zugewiesen – es wird der Klassenplan angezeigt.'

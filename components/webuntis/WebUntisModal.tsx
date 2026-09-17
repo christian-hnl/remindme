@@ -11,9 +11,10 @@ interface WebUntisModalProps {
   onClose: () => void;
   config: WebUntisConfig | null;
   onSyncCompleted: (message: string) => void;
+  onGroupsChanged: () => void;
 }
 
-export const WebUntisModal: React.FC<WebUntisModalProps> = ({ isOpen, onClose, config, onSyncCompleted }) => (
+export const WebUntisModal: React.FC<WebUntisModalProps> = ({ isOpen, onClose, config, onSyncCompleted, onGroupsChanged }) => (
   <Modal
     isOpen={isOpen}
     onClose={onClose}
@@ -21,6 +22,6 @@ export const WebUntisModal: React.FC<WebUntisModalProps> = ({ isOpen, onClose, c
     subtitle="Stundenplan, Vertretungen und Hausübungen automatisch laden"
     icon={<School className="h-[18px] w-[18px]" />}
   >
-    <WebUntisConfigForm config={config} onSynced={onSyncCompleted} />
+    <WebUntisConfigForm config={config} onSynced={onSyncCompleted} onGroupsChanged={onGroupsChanged} />
   </Modal>
 );

@@ -26,6 +26,22 @@ export const SafeToSpendDial: React.FC<SafeToSpendDialProps> = ({
   const exhausted = safeToSpendDaily <= 0;
   const [euros, cents] = safeToSpendDaily.toFixed(2).split('.');
 
+  if (monthlyBudget <= 0) {
+    return (
+      <section className="card card-pad" aria-label="Tagesbudget">
+        <p className="eyebrow">Tagesbudget</p>
+        <h2 className="card-title mt-1">Wie viel willst du pro Monat ausgeben?</h2>
+        <p className="mt-2 text-[14px] leading-relaxed text-ink-2">
+          Leg ein Monatsbudget fest (ohne Fixkosten wie Handy oder Abos). Dann siehst du jeden Tag, wie viel du heute noch ausgeben kannst.
+        </p>
+        <p className="mt-3 text-[13px] text-ink-3">Kontostand: <b className="font-mono text-ink tabular">{formatEuro(totalBalance)}</b></p>
+        <button type="button" onClick={onOpenSettings} className="btn-primary mt-4">
+          <SlidersHorizontal className="h-4 w-4" /> Budget festlegen
+        </button>
+      </section>
+    );
+  }
+
   return (
     <section className="card card-pad" aria-label="Tagesbudget">
       <div className="flex items-start justify-between gap-3">

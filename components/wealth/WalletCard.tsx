@@ -10,7 +10,9 @@ interface WalletCardProps {
   dailyBudgetBaseline: number;
   totalBalance: number;
   freeThisMonth: number;
+  monthlyBudget: number;
   pots: SavingsPot[];
+  onSetBudget: () => void;
   onOpenWealth: () => void;
   onAddTransaction: () => void;
   onOpenPot: (pot: SavingsPot) => void;
@@ -22,7 +24,9 @@ export const WalletCard: React.FC<WalletCardProps> = ({
   dailyBudgetBaseline,
   totalBalance,
   freeThisMonth,
+  monthlyBudget,
   pots,
+  onSetBudget,
   onOpenWealth,
   onAddTransaction,
   onOpenPot,
@@ -44,6 +48,20 @@ export const WalletCard: React.FC<WalletCardProps> = ({
         </button>
       </div>
 
+      {monthlyBudget <= 0 ? (
+        <div className="mt-3">
+          <p className="text-[14px] text-ink-2">Leg ein Monatsbudget fest, dann siehst du hier jeden Tag, wie viel du noch ausgeben kannst.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={onSetBudget} className="btn-primary">
+              Budget festlegen
+            </button>
+            <button type="button" onClick={onAddTransaction} className="btn-secondary">
+              <Plus className="h-4 w-4" /> Buchung
+            </button>
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="mt-3 flex items-end justify-between gap-3">
         <p className={`font-display font-bold leading-none tabular ${exhausted ? 'text-pen' : 'text-ink'}`}>
           <span className="text-[52px]">{Number(euros).toLocaleString('de-DE')}</span>
@@ -71,6 +89,8 @@ export const WalletCard: React.FC<WalletCardProps> = ({
       <p className="mt-1.5 text-[13px] text-ink-3">
         {exhausted ? 'Tagesbudget aufgebraucht.' : `${Math.round(ratio * 100)} % vom Ø-Tagesbudget (${formatEuro(dailyBudgetBaseline)})`}
       </p>
+      </>
+      )}
 
       <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line/10 bg-line/10">
         <div className="bg-sheet px-3 py-2.5">
@@ -80,8 +100,8 @@ export const WalletCard: React.FC<WalletCardProps> = ({
           </dd>
         </div>
         <div className="bg-sheet px-3 py-2.5">
-          <dt className="eyebrow text-[11px]">Monat frei</dt>
-          <dd className="mt-0.5 font-mono text-[15px] font-medium text-ink tabular">{formatEuro(freeThisMonth)}</dd>
+          <dt className="eyebrow text-[11px]">{monthlyBudget > 0 ? 'Monat frei' : 'Spartöpfe'}</dt>
+          <dd className="mt-0.5 font-mono text-[15px] font-medium text-ink tabular">{formatEuro(monthlyBudget > 0 ? freeThisMonth : pots.reduce((sum, p) => sum + p.currentAmount, 0))}</dd>
         </div>
       </dl>
 

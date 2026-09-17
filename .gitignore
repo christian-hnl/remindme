@@ -38,3 +38,8 @@ next-env.d.ts
 dev.db
 dev.db-journal
 .idea/
+
+# local database backups
+prisma/backups/
+*.db
+*.db-journal

@@ -30,7 +30,11 @@ export async function PATCH(req: Request, { params }: Params) {
       data.subjectId = subject?.id ?? null;
     }
 
-    const updated = await db.exam.update({ where: { id: exam.id }, data, include: { subject: true } });
+    const updated = await db.exam.update({
+      where: { id: exam.id },
+      data,
+      include: { subject: true, topicItems: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] } },
+    });
     return NextResponse.json(updated);
   } catch (error) {
     return serverError('PATCH /exams/[id]', error, 'Prüfung konnte nicht gespeichert werden');

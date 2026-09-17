@@ -11,8 +11,8 @@ model User {
   id              String           @id @default(uuid())
   email           String           @unique
   displayName     String
-  monthlyBudget   Float            @default(580.0)
-  startingBalance Float            @default(2840.5)
+  monthlyBudget   Float            @default(0)
+  startingBalance Float            @default(0)
   preferences     String           @default("{\"theme\": \"dark\", \"currency\": \"EUR\", \"active_mode\": \"all\"}")
   createdAt       DateTime         @default(now())
   subjects        Subject[]
@@ -52,6 +52,15 @@ model WebUntisConfig {
   autoSync       Boolean   @default(true)
   /// personal = the student's own timetable, class = the whole class incl. parallel groups
   timetableScope String    @default("personal")
+  /// JSON array of studentGroup tags (see ScheduleBlock.studentGroup) that belong to this user,
+  /// e.g. ["1"] for "Gruppe 1" or ["PM-UI"] for a Schwerpunkt. Empty = show every group.
+  selectedGroups String    @default("[]")
+  /// JSON array of lesson keys (day|start|subject|group) the user does not attend – used for
+  /// the parallel slots WebUntis leaves untagged, where only the student knows their half.
+  hiddenLessons  String    @default("[]")
+  /// JSON array of { keys, anchorMonday, anchorKey } for slots that alternate week by week
+  /// (e.g. SENCYB: one week Weixlbaum, the next Schreiber).
+  rotatingLessons String   @default("[]")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 }
@@ -152,8 +161,26 @@ model Exam {
   title     String
   kind      String   @default("test") // schularbeit | test | pruefung | referat | sonstiges
   date      DateTime
+  /// Free-text notes; the checklist lives in topicItems below.
   topics    String?
   isDone    Boolean  @default(false)
+  /// Set by the WebUntis sync (lesson type "ex") so a re-sync updates instead of duplicating.
+  isUntisSync     Boolean     @default(false)
+  externalUntisId String?
+  createdAt DateTime @default(now())
+  topicItems ExamTopic[]
+
+  @@unique([userId, externalUntisId])
+}
+
+/// One checkable item of exam material ("Stoff"), e.g. a chapter or topic.
+model ExamTopic {
+  id        String   @id @default(uuid())
+  examId    String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  title     String
+  isDone    Boolean  @default(false)
+  position  Int      @default(0)
   createdAt DateTime @default(now())
 }
 
@@ -311,6 +338,11 @@ model ScheduleBlock {
   isCancelled      Boolean  @default(false)
   substitutionNote String?
   externalUntisId  String?
+  /// Raw WebUntis student-group tag ("sg"), or a fallback (teacher/room) when two parallel
+  /// lessons of the same subject share a slot without one. Null = a lesson everyone attends.
+  studentGroup     String?
+  /// WebUntis lesson type "ex" – an exam gets mirrored into the Exam model automatically.
+  isExam           Boolean  @default(false)
   createdAt        DateTime @default(now())
   tasks            Task[]
 }

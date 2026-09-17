@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { format, getISOWeek, isSameDay } from 'date-fns';
 import { de } from 'date-fns/locale';
 import type { Birthday, Exam, Reminder, ScheduleBlock, Task } from '@/types';
-import { countdownLabel, daysUntil } from '@/lib/school';
+import { countdownLabel, daysUntil, lessonPhase } from '@/lib/school';
 import { formatEuro, minutesToTime, timeToMinutes } from '@/lib/format';
 import { assignLanes } from '@/lib/lanes';
 
@@ -72,10 +72,12 @@ export const TodayRuler: React.FC<TodayRulerProps> = ({
   const laneOf = assignLanes(lessons);
   const minutesNow = now ? now.getHours() * 60 + now.getMinutes() : null;
 
-  const current =
-    minutesNow === null
-      ? undefined
-      : activeLessons.find((b) => minutesNow >= timeToMinutes(b.startTime) && minutesNow < timeToMinutes(b.endTime));
+  // A lesson stays "current" a few minutes after it ends and becomes "upcoming" a bit before
+  // it starts, so the transition between two lessons is never a blank headline.
+  const phaseOf = (b: ScheduleBlock) =>
+    minutesNow === null ? null : lessonPhase(timeToMinutes(b.startTime), timeToMinutes(b.endTime), minutesNow);
+  const current = activeLessons.find((b) => phaseOf(b) === 'current');
+  const upcoming = current ? undefined : activeLessons.find((b) => phaseOf(b) === 'upcoming');
   const next = minutesNow === null ? undefined : activeLessons.find((b) => timeToMinutes(b.startTime) > minutesNow);
 
   const dueTasks = tasks.filter((t) => t.status !== 'done' && isSameDay(new Date(t.dueDate), day));
@@ -129,13 +131,25 @@ export const TodayRuler: React.FC<TodayRulerProps> = ({
     } else if (activeLessons.length === 0) {
       headline = <>Heute kein Unterricht</>;
       detail = lessons.length ? 'Alle Stunden entfallen.' : 'Für heute sind keine Stunden eingetragen.';
-    } else if (current) {
+    } else if (current && minutesNow! < timeToMinutes(current.endTime)) {
       headline = (
         <>
           Jetzt <span className="marker">{lessonName(current)}</span>
         </>
       );
       detail = `bis ${current.endTime}${current.room ? ` · ${current.room}` : ''} · noch ${timeToMinutes(current.endTime) - minutesNow!} min`;
+    } else if (current) {
+      // Grace period: the lesson just ended, give a moment before switching to "next".
+      headline = <>{lessonName(current)} ist aus</>;
+      detail = next ? `gleich: ${lessonName(next)} um ${next.startTime}` : 'Pause';
+    } else if (upcoming) {
+      const inMinutes = timeToMinutes(upcoming.startTime) - minutesNow!;
+      headline = (
+        <>
+          Gleich <span className="marker">{lessonName(upcoming)}</span>
+        </>
+      );
+      detail = `in ${inMinutes} min · ${upcoming.startTime}${upcoming.room ? ` · ${upcoming.room}` : ''}${upcoming.teacher ? ` · ${upcoming.teacher}` : ''}`;
     } else if (next) {
       const inMinutes = timeToMinutes(next.startTime) - minutesNow!;
       headline = (
@@ -158,7 +172,7 @@ export const TodayRuler: React.FC<TodayRulerProps> = ({
   const summary = [
     dueTasks.length ? plural(dueTasks.length, 'Hausübung fällig', 'Hausübungen fällig') : 'keine Hausübung fällig',
     todaysReminders.length ? plural(todaysReminders.length, 'Erinnerung', 'Erinnerungen') : 'keine Erinnerungen',
-    `${formatEuro(safeToSpendDaily)} frei`,
+    safeToSpendDaily > 0 ? `${formatEuro(safeToSpendDaily)} frei` : null,
     nextExam ? `${nextExam.title} ${countdownLabel(daysUntil(new Date(nextExam.date), day))}` : null,
     ...birthdaysToday.map((b) => `${b.name} hat Geburtstag 🎉`),
   ]
@@ -191,7 +205,7 @@ export const TodayRuler: React.FC<TodayRulerProps> = ({
           </h1>
           {detail && <p className="mt-2 font-mono text-[13px] text-ink-2 sm:text-[14px]">{detail}</p>}
           <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-ink-2">
-            {now && `${greetingFor(now.getHours())}, ${displayName}. `}
+            {now && `${greetingFor(now.getHours())}${displayName ? `, ${displayName}` : ''}. `}
             Heute: {summary}.
           </p>
         </div>
@@ -244,7 +258,7 @@ export const TodayRuler: React.FC<TodayRulerProps> = ({
           {lessons.map((b) => {
             const start = timeToMinutes(b.startTime);
             const end = timeToMinutes(b.endTime);
-            const isCurrent = current?.id === b.id;
+            const isCurrent = current?.id === b.id || upcoming?.id === b.id;
             const passed = minutesNow !== null && minutesNow >= end;
             // Parallel lessons (groups) share the 56px band as stacked lanes.
             const { lane, lanes } = laneOf.get(b.id) ?? { lane: 0, lanes: 1 };

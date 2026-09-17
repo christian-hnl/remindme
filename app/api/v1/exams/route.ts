@@ -23,7 +23,7 @@ export async function POST(req: Request) {
         date,
         topics: cleanString(body.topics, 2000) || null,
       },
-      include: { subject: true },
+      include: { subject: true, topicItems: true },
     });
     return NextResponse.json(exam, { status: 201 });
   } catch (error) {

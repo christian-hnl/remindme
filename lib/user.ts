@@ -10,7 +10,7 @@ export async function getCurrentUser() {
   return db.user.upsert({
     where: { email: DEFAULT_USER_EMAIL },
     update: {},
-    create: { email: DEFAULT_USER_EMAIL, displayName: 'Alexander' },
+    create: { email: DEFAULT_USER_EMAIL, displayName: '' },
   });
 }
 

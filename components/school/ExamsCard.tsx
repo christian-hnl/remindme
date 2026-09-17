@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { addDays, format } from 'date-fns';
 import { de } from 'date-fns/locale';
-import { ChevronDown, GraduationCap, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, GraduationCap, Plus, RadioTower, Trash2 } from 'lucide-react';
 import type { Exam, ExamKind, Subject } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { CheckButton } from '@/components/ui/CheckButton';
@@ -27,6 +27,9 @@ interface ExamsCardProps {
   onDelete: (id: string) => void;
   onToggleDone: (exam: Exam) => void;
   onEnterGrade: (exam: Exam) => void;
+  onAddTopic: (examId: string, title: string) => void;
+  onToggleTopic: (examId: string, topicId: string, isDone: boolean) => void;
+  onDeleteTopic: (examId: string, topicId: string) => void;
 }
 
 const emptyForm = () => ({
@@ -46,16 +49,24 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
   onDelete,
   onToggleDone,
   onEnterGrade,
+  onAddTopic,
+  onToggleTopic,
+  onDeleteTopic,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [editing, setEditing] = useState<Exam | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [showPast, setShowPast] = useState(false);
+  const [topicInput, setTopicInput] = useState('');
+
+  // Keep the checklist in the open modal in sync as topics get toggled/added from outside.
+  const current = editing ? exams.find((e) => e.id === editing.id) ?? editing : null;
 
   const openCreate = () => {
     setEditing(null);
     setForm(emptyForm());
+    setTopicInput('');
     setIsOpen(true);
   };
 
@@ -68,7 +79,15 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
       subjectId: exam.subjectId ?? '',
       topics: exam.topics ?? '',
     });
+    setTopicInput('');
     setIsOpen(true);
+  };
+
+  const addTopic = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing || !topicInput.trim()) return;
+    onAddTopic(editing.id, topicInput.trim());
+    setTopicInput('');
   };
 
   useEffect(() => {
@@ -144,9 +163,15 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
                     <span className="flex items-center gap-2">
                       {exam.subject && <span className="h-2.5 w-2.5 flex-shrink-0 rounded-[3px]" style={{ backgroundColor: exam.subject.colorHex }} />}
                       <span className="truncate text-[15px] font-bold text-ink">{exam.title}</span>
+                      {exam.isUntisSync && (
+                        <span className="chip flex-shrink-0 gap-1 text-[10px]" title="Automatisch aus WebUntis erkannt">
+                          <RadioTower className="h-3 w-3" /> Untis
+                        </span>
+                      )}
                     </span>
                     <span className="mt-0.5 block text-[13px] text-ink-2">
                       {EXAM_KIND_LABELS[exam.kind]} · {format(date, 'EEEE, d. MMM', { locale: de })}
+                      {exam.topicItems.length > 0 && ` · ${exam.topicItems.filter((t) => t.isDone).length}/${exam.topicItems.length} Themen`}
                     </span>
                     <span className={`mt-1 block text-[13px] font-bold ${days <= lead ? 'text-accent' : 'text-ink-3'}`}>
                       {days <= lead ? 'Jetzt lernen' : `Lernen ab ${format(addDays(date, -lead), 'EEE d. MMM', { locale: de })}`}
@@ -282,6 +307,50 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
             />
           </div>
         </form>
+
+        {current && (
+          <div className="mt-5 border-t border-line/10 pt-5">
+            <span className="field-label">Themen zum Abhaken</span>
+            {current.topicItems.length > 0 && (
+              <ul className="mb-2 space-y-1">
+                {current.topicItems.map((topic) => (
+                  <li key={topic.id} className="group flex items-center gap-2.5 py-0.5">
+                    <CheckButton
+                      checked={topic.isDone}
+                      onChange={() => onToggleTopic(current.id, topic.id, !topic.isDone)}
+                      label={topic.isDone ? `${topic.title} wieder öffnen` : `${topic.title} erledigt`}
+                    />
+                    <span className={`min-w-0 flex-1 text-[14px] ${topic.isDone ? 'text-ink-3 line-through' : 'text-ink'}`}>{topic.title}</span>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteTopic(current.id, topic.id)}
+                      className="icon-btn h-7 w-7 hover:text-pen sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                      aria-label={`${topic.title} löschen`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form onSubmit={addTopic} className="flex gap-2">
+              <label htmlFor="exam-topic-input" className="sr-only">
+                Neues Thema
+              </label>
+              <input
+                id="exam-topic-input"
+                value={topicInput}
+                maxLength={200}
+                onChange={(e) => setTopicInput(e.target.value)}
+                placeholder="z. B. Integralrechnung"
+                className="field-input h-10 py-0"
+              />
+              <button type="submit" disabled={!topicInput.trim()} className="btn-primary h-10 w-10 flex-shrink-0 px-0" aria-label="Thema hinzufügen">
+                <Plus className="h-4 w-4" />
+              </button>
+            </form>
+          </div>
+        )}
       </Modal>
     </section>
   );

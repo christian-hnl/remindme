@@ -1,14 +1,16 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { formatDistanceToNow } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import { de } from 'date-fns/locale';
 import type { ScheduleBlock, Task, WebUntisConfig } from '@/types';
-import { AlertTriangle, Maximize2, Minimize2, Plus, RefreshCw, School } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, GraduationCap, Maximize2, Minimize2, Plus, RefreshCw, School } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { CheckButton } from '@/components/ui/CheckButton';
-import { minutesToTime, timeToMinutes } from '@/lib/format';
+import { minutesToTime, timeToMinutes, toDateInput } from '@/lib/format';
+import { api, errorMessage } from '@/lib/client';
 import { groupOverlapping } from '@/lib/lanes';
+import { lessonPhase } from '@/lib/school';
 import { DEMO_SCHOOL } from '@/lib/untis-defaults';
 
 interface TimetableScheduleProps {
@@ -91,7 +93,7 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   onEditTask,
 }) => {
   const clock = useClock();
-  const schoolDay = clock && clock.weekday >= 1 && clock.weekday <= 5 ? clock.weekday : null;
+  const todaysWeekday = clock && clock.weekday >= 1 && clock.weekday <= 5 ? clock.weekday : null;
   const minutesNow = clock?.minutes ?? -1;
 
   const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
@@ -99,6 +101,36 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   const [subjectFilter, setSubjectFilter] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [inspectId, setInspectId] = useState<string | null>(null);
+  // 0 = the synced week in the database; other offsets are fetched live from WebUntis.
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [weekCache, setWeekCache] = useState<Record<number, ScheduleBlock[]>>({});
+  const [weekLoading, setWeekLoading] = useState(false);
+  const [weekError, setWeekError] = useState<string | null>(null);
+
+  // "Today" markers and the now-line only make sense in the current week.
+  const schoolDay = weekOffset === 0 ? todaysWeekday : null;
+
+  const mondayOf = (offset: number) => {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() - ((d.getDay() || 7) - 1) + offset * 7);
+    return d;
+  };
+
+  useEffect(() => {
+    if (weekOffset === 0 || weekCache[weekOffset]) return;
+    let cancelled = false;
+    setWeekLoading(true);
+    setWeekError(null);
+    api<{ lessons: ScheduleBlock[] }>(`/api/v1/webuntis/week?monday=${toDateInput(mondayOf(weekOffset))}`)
+      .then((res) => !cancelled && setWeekCache((cache) => ({ ...cache, [weekOffset]: res.lessons })))
+      .catch((error) => !cancelled && setWeekError(errorMessage(error)))
+      .finally(() => !cancelled && setWeekLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekOffset]);
 
   useEffect(() => {
     const weekday = new Date().getDay();
@@ -121,7 +153,9 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
     };
   }, [isFullscreen]);
 
-  const periods = useMemo(() => buildPeriods(schedule), [schedule]);
+  const displaySchedule = weekOffset === 0 ? schedule : weekCache[weekOffset] ?? [];
+
+  const periods = useMemo(() => buildPeriods(displaySchedule), [displaySchedule]);
   const periodOf = (b: ScheduleBlock) => {
     const start = timeToMinutes(b.startTime);
     return periods.find((p) => start >= p.startMin && start <= p.lastStartMin)?.id ?? 0;
@@ -129,28 +163,39 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
 
   const subjects = useMemo(() => {
     const map = new Map<string, { code: string; name: string; colorHex: string; count: number }>();
-    for (const b of schedule) {
+    for (const b of displaySchedule) {
       const code = blockCode(b);
       const entry = map.get(code);
       if (entry) entry.count++;
       else map.set(code, { code, name: blockName(b), colorHex: b.colorHex, count: 1 });
     }
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'de'));
-  }, [schedule]);
+  }, [displaySchedule]);
 
-  const filtered = subjectFilter ? schedule.filter((b) => blockCode(b) === subjectFilter) : schedule;
+  const filtered = subjectFilter ? displaySchedule.filter((b) => blockCode(b) === subjectFilter) : displaySchedule;
 
   const todayLessons = schoolDay
-    ? schedule
+    ? displaySchedule
         .filter((b) => b.dayOfWeek === schoolDay && !b.isCancelled)
         .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime))
     : [];
-  const isNow = (b: ScheduleBlock) =>
-    b.dayOfWeek === schoolDay && !b.isCancelled && minutesNow >= timeToMinutes(b.startTime) && minutesNow < timeToMinutes(b.endTime);
-  const activeBlock = todayLessons.find(isNow);
-  const nextBlock = activeBlock ? undefined : todayLessons.find((b) => timeToMinutes(b.startTime) > minutesNow);
-  const spotlight = activeBlock ?? nextBlock;
-  const inspectBlock = schedule.find((b) => b.id === inspectId) ?? null;
+  // A lesson is highlighted from 10 min before it starts to 5 min after it ends, so the
+  // transition between two lessons always shows both which just ended and what's next.
+  const phaseOf = (b: ScheduleBlock) => lessonPhase(timeToMinutes(b.startTime), timeToMinutes(b.endTime), minutesNow);
+  const isNow = (b: ScheduleBlock) => b.dayOfWeek === schoolDay && !b.isCancelled && phaseOf(b) !== null;
+  const activeBlock = todayLessons.find((b) => phaseOf(b) === 'current' && minutesNow < timeToMinutes(b.endTime));
+  const upcomingBlock = activeBlock ? undefined : todayLessons.find((b) => phaseOf(b) === 'upcoming');
+  const nextBlock = activeBlock || upcomingBlock ? undefined : todayLessons.find((b) => timeToMinutes(b.startTime) > minutesNow);
+  const spotlight = activeBlock ?? upcomingBlock ?? nextBlock;
+  const inspectBlock = displaySchedule.find((b) => b.id === inspectId) ?? null;
+
+  const weekMonday = mondayOf(weekOffset);
+  const weekFriday = new Date(weekMonday);
+  weekFriday.setDate(weekMonday.getDate() + 4);
+  const weekLabel =
+    weekOffset === 0
+      ? 'Diese Woche'
+      : `${format(weekMonday, 'd.M.')}–${format(weekFriday, 'd.M.')}`;
 
   const isDemo = untisConfig?.school === DEMO_SCHOOL;
   const syncFailed = untisConfig?.isConnected === false;
@@ -164,18 +209,19 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
         key={block.id}
         type="button"
         onClick={() => setInspectId(block.id)}
-        title={`${blockName(block)} · ${block.startTime}–${block.endTime}${block.room ? ` · ${block.room}` : ''}${block.teacher ? ` · ${block.teacher}` : ''}`}
+        title={`${blockName(block)} · ${block.startTime}–${block.endTime}${block.room ? ` · ${block.room}` : ''}${block.teacher ? ` · ${block.teacher}` : ''}${block.isExam ? ' · Prüfung' : ''}`}
         className={`block w-full min-w-0 rounded-[8px] border-l-[3px] text-left transition-[filter] hover:brightness-95 ${compact ? 'px-1.5 py-1.5' : 'p-2'} ${
           block.isCancelled ? 'hatch' : ''
-        } ${isNow(block) ? 'ring-2 ring-marker ring-offset-1 ring-offset-sheet' : ''}`}
-        style={{ borderLeftColor: block.colorHex, backgroundColor: `${block.colorHex}1f` }}
+        } ${isNow(block) ? 'ring-2 ring-marker ring-offset-1 ring-offset-sheet' : ''} ${block.isExam ? 'border-pen/70' : ''}`}
+        style={{ borderLeftColor: block.isExam ? undefined : block.colorHex, backgroundColor: block.isExam ? 'rgb(var(--pen) / 0.12)' : `${block.colorHex}1f` }}
       >
         <span className="flex items-baseline justify-between gap-1">
           <span
-            className={`truncate font-display font-bold leading-none text-ink ${compact ? 'text-[14px]' : 'text-[16px]'} ${
+            className={`flex min-w-0 items-center gap-1 truncate font-display font-bold leading-none text-ink ${compact ? 'text-[14px]' : 'text-[16px]'} ${
               block.isCancelled ? 'line-through decoration-pen decoration-2' : ''
             }`}
           >
+            {block.isExam && <GraduationCap className="h-3.5 w-3.5 flex-shrink-0 text-pen" aria-label="Prüfung" />}
             {blockCode(block)}
           </span>
           {pending > 0 && (
@@ -218,18 +264,19 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
     return (
       <div
         key={block.id}
-        className={`min-w-0 rounded-[10px] border border-l-[3px] border-line/10 ${compact ? 'p-2.5' : 'p-3'} ${block.isCancelled ? 'hatch' : ''} ${
-          current ? 'ring-2 ring-marker' : ''
-        }`}
-        style={{ borderLeftColor: block.colorHex }}
+        className={`min-w-0 rounded-[10px] border border-l-[3px] ${block.isExam ? 'border-pen/40' : 'border-line/10'} ${compact ? 'p-2.5' : 'p-3'} ${
+          block.isCancelled ? 'hatch' : ''
+        } ${current ? 'ring-2 ring-marker' : ''}`}
+        style={{ borderLeftColor: block.isExam ? undefined : block.colorHex, backgroundColor: block.isExam ? 'rgb(var(--pen) / 0.06)' : undefined }}
       >
         <button type="button" onClick={() => setInspectId(block.id)} className="block w-full min-w-0 text-left">
           <span className="flex items-start justify-between gap-2">
             <span
-              className={`min-w-0 font-display font-semibold leading-tight text-ink ${compact ? 'truncate text-[16px]' : 'text-[19px]'} ${
+              className={`flex min-w-0 items-center gap-1.5 font-display font-semibold leading-tight text-ink ${compact ? 'truncate text-[16px]' : 'text-[19px]'} ${
                 block.isCancelled ? 'line-through decoration-pen decoration-2' : ''
               }`}
             >
+              {block.isExam && <GraduationCap className="h-4 w-4 flex-shrink-0 text-pen" aria-label="Prüfung" />}
               {current ? <span className="marker">{blockName(block)}</span> : blockName(block)}
             </span>
             {!compact && <span className="chip mt-0.5 font-mono">{blockCode(block)}</span>}
@@ -277,13 +324,51 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
             </button>
           ) : (
             <p className="mt-1 text-[13px] text-ink-3">
-              {isDemo ? 'Beispiel-Stundenplan' : 'WebUntis'}
-              {lastSync && ` · aktualisiert ${lastSync}`}
+              {weekOffset === 0 ? (
+                <>
+                  {isDemo ? 'Beispiel-Stundenplan' : 'WebUntis'}
+                  {lastSync && ` · aktualisiert ${lastSync}`}
+                </>
+              ) : (
+                <>
+                  {format(weekMonday, 'd. MMMM', { locale: de })} – {format(weekFriday, 'd. MMMM yyyy', { locale: de })}
+                  {weekLoading && ' · lädt…'}
+                </>
+              )}
             </p>
           )}
         </div>
 
         <div className="flex items-center gap-1">
+          <div className="flex items-center rounded-[12px] border border-line/10 bg-inset p-0.5" role="group" aria-label="Woche wechseln">
+            <button
+              type="button"
+              onClick={() => setWeekOffset((w) => w - 1)}
+              className="icon-btn h-8 w-8 rounded-[9px]"
+              aria-label="Woche zurück"
+              title="Woche zurück"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeekOffset(0)}
+              disabled={weekOffset === 0}
+              className="min-w-[92px] px-1 text-center font-mono text-[12px] font-bold text-ink tabular disabled:text-ink-2"
+              title="Zur aktuellen Woche"
+            >
+              {weekLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeekOffset((w) => w + 1)}
+              className="icon-btn h-8 w-8 rounded-[9px]"
+              aria-label="Woche vor"
+              title="Woche vor"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
           <div className="segmented w-[148px] grid-cols-2" role="group" aria-label="Ansicht">
             <button type="button" aria-pressed={viewMode === 'week'} onClick={() => setViewMode('week')} className="segmented-item min-h-[34px]">
               Woche
@@ -307,14 +392,29 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
         </div>
       </div>
 
-      {schedule.length === 0 ? (
+      {displaySchedule.length === 0 ? (
         <div className="px-4 pb-8 pt-4 text-center sm:px-5">
-          <School className="mx-auto mb-3 h-8 w-8 text-ink-3" />
-          <p className="font-bold text-ink">Noch kein Stundenplan</p>
-          <p className="mb-4 mt-1 text-[14px] text-ink-2">Verbinde WebUntis, dann erscheinen hier deine Stunden.</p>
-          <button type="button" onClick={onOpenUntisModal} className="btn-primary">
-            WebUntis verbinden
-          </button>
+          {weekOffset !== 0 ? (
+            <>
+              <School className="mx-auto mb-3 h-8 w-8 text-ink-3" />
+              <p className="font-bold text-ink">{weekLoading ? 'Lädt diese Woche…' : weekError ? 'Woche nicht geladen' : 'Kein Unterricht in dieser Woche'}</p>
+              {weekError && <p className="mb-4 mt-1 text-[14px] text-pen">{weekError}</p>}
+              {!weekLoading && (
+                <button type="button" onClick={() => setWeekOffset(0)} className="btn-secondary mt-3">
+                  Zurück zu dieser Woche
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <School className="mx-auto mb-3 h-8 w-8 text-ink-3" />
+              <p className="font-bold text-ink">Noch kein Stundenplan</p>
+              <p className="mb-4 mt-1 text-[14px] text-ink-2">Verbinde WebUntis, dann erscheinen hier deine Stunden.</p>
+              <button type="button" onClick={onOpenUntisModal} className="btn-primary">
+                WebUntis verbinden
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <>
@@ -347,8 +447,10 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
               <span className="min-w-0">
                 <span className="eyebrow">
                   {activeBlock
-                    ? `Jetzt · noch ${timeToMinutes(spotlight.endTime) - minutesNow} min`
-                    : `Als Nächstes · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`}
+                    ? `Jetzt · noch ${Math.max(0, timeToMinutes(spotlight.endTime) - minutesNow)} min`
+                    : upcomingBlock
+                      ? `Gleich · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`
+                      : `Als Nächstes · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`}
                 </span>
                 <span className="mt-0.5 block truncate font-display text-[20px] font-semibold leading-tight text-ink">
                   <span className="marker">{blockName(spotlight)}</span>
@@ -468,6 +570,17 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
                 <dd className="mt-1 text-[15px] font-bold text-ink">{inspectBlock.teacher || '—'}</dd>
               </div>
             </dl>
+
+            {(inspectBlock.isExam || inspectBlock.studentGroup) && (
+              <div className="flex flex-wrap gap-1.5">
+                {inspectBlock.isExam && (
+                  <span className="chip gap-1 border-pen/30 bg-pen/10 text-pen">
+                    <GraduationCap className="h-3.5 w-3.5" /> Prüfung
+                  </span>
+                )}
+                {inspectBlock.studentGroup && <span className="chip">Gruppe: {inspectBlock.studentGroup}</span>}
+              </div>
+            )}
 
             {inspectBlock.substitutionNote && (
               <p

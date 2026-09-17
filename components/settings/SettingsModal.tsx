@@ -93,7 +93,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSave = async () => {
     const budget = parseAmount(monthlyBudget);
     const balance = parseAmount(startingBalance);
-    if (!displayName.trim()) return toast('Bitte einen Namen eingeben', 'error');
     if (!(budget >= 0)) return toast('Das Monatsbudget muss 0 oder mehr sein', 'error');
     if (Number.isNaN(balance)) return toast('Ungültiger Startkontostand', 'error');
 
@@ -200,7 +199,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {tab === 'school' && (
           <>
-            <WebUntisConfigForm config={untisConfig} onSynced={onUntisSynced} />
+            <WebUntisConfigForm config={untisConfig} onSynced={onUntisSynced} onGroupsChanged={onSettingsSaved} />
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] bg-inset p-4">
               <div>
                 <p className="font-bold text-ink">Im Handy-Kalender anzeigen</p>

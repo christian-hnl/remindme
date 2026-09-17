@@ -46,6 +46,10 @@ export interface ScheduleBlock {
   isCancelled?: boolean;
   substitutionNote?: string | null;
   externalUntisId?: string | null;
+  /** Untis student-group tag (Gruppe 1/2, Schwerpunkte); null = everyone attends. */
+  studentGroup?: string | null;
+  /** Untis exam period – mirrored into an Exam automatically. */
+  isExam?: boolean;
   tasks?: Task[];
 }
 
@@ -88,6 +92,31 @@ export interface WebUntisConfig {
   lastSyncAt?: string | null;
   autoSync: boolean;
   timetableScope: 'personal' | 'class';
+  /** Student-group tags (see ScheduleBlock.studentGroup) the user identifies with. */
+  selectedGroups: string[];
+  /** Lesson keys (see lessonKey) the user marked as "not mine". */
+  hiddenLessons: string[];
+  /** Slots that alternate week by week (one week teacher A, the next teacher B). */
+  rotatingLessons: { keys: string[]; anchorMonday: string; anchorKey: string }[];
+  /** Every group tag found in the synced timetable, before filtering. */
+  availableGroups?: { tag: string; count: number; subjects: string[] }[];
+  /** Slots with parallel lessons, so the user can pick which half of the class they're in. */
+  parallelSlots?: {
+    day: number;
+    startTime: string;
+    endTime: string;
+    lessons: {
+      key: string;
+      subjectCode: string;
+      subjectName: string;
+      teacher?: string | null;
+      room?: string | null;
+      studentGroup?: string | null;
+      colorHex: string;
+      hidden: boolean;
+      rotatedAway: boolean;
+    }[];
+  }[];
 }
 
 export interface SavingsPot {
@@ -144,15 +173,25 @@ export interface BankConnectionSummary {
   lastError?: string | null;
 }
 
+export interface ExamTopic {
+  id: string;
+  title: string;
+  isDone: boolean;
+  position: number;
+}
+
 export interface Exam {
   id: string;
   title: string;
   kind: ExamKind;
   date: string;
   topics?: string | null;
+  topicItems: ExamTopic[];
   isDone: boolean;
   subjectId?: string | null;
   subject?: Subject | null;
+  /** Auto-detected from WebUntis (lesson type "ex"). */
+  isUntisSync?: boolean;
 }
 
 export interface Grade {
@@ -348,6 +387,8 @@ export interface DashboardSummary {
     email: string;
     monthlyBudget: number;
     startingBalance: number;
+    /** Name entered or welcome skipped. */
+    onboarded: boolean;
   };
   metrics: {
     totalBalance: number;
