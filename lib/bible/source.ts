@@ -1,7 +1,8 @@
 import { db } from '@/lib/db';
-import { BIBLE_TRANSLATIONS, DAILY_VERSES, bookByNr, dailyVerseIndex, formatReference, type BibleTranslation } from './books';
+import { BIBLE_TRANSLATIONS, DAILY_VERSES, bookByNr, booksFor, dailyVerseIndex, formatReference, translationInfo, type BibleTranslation } from './books';
 
-const API = 'https://api.getbible.net/v2';
+const GETBIBLE_API = 'https://api.getbible.net/v2';
+const BOLLS_API = 'https://bolls.life';
 const REQUEST_TIMEOUT_MS = 20_000;
 
 export interface BibleVerse {
@@ -26,9 +27,10 @@ export const isTranslation = (value: unknown): value is BibleTranslation =>
  * count and makes all further reading instant – and offline.
  */
 async function cacheBook(translation: BibleTranslation, bookNr: number) {
+  const sourceId = translationInfo(translation)?.sourceId ?? translation;
   let response: Response;
   try {
-    response = await fetch(`${API}/${translation}/${bookNr}.json`, {
+    response = await fetch(`${GETBIBLE_API}/${sourceId}/${bookNr}.json`, {
       cache: 'no-store',
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -66,16 +68,67 @@ async function cacheBook(translation: BibleTranslation, bookNr: number) {
   return { name, chapterCount: chapters.length };
 }
 
+/** The Menge text carries line breaks and italic glosses as HTML. */
+const stripHtml = (value: string) =>
+  value
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** bolls.life serves single chapters, so the chapter count comes from the static book list. */
+async function cacheBollsChapter(translation: BibleTranslation, bookNr: number, chapter: number) {
+  const info = translationInfo(translation);
+  const book = bookByNr(bookNr);
+  if (!info || !book) throw new Error('Diese Ausgabe kennt das Buch nicht.');
+
+  let response: Response;
+  try {
+    response = await fetch(`${BOLLS_API}/get-chapter/${info.sourceId}/${bookNr}/${chapter}/`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new Error('Bibeltext konnte nicht geladen werden – bist du online?');
+  }
+  if (!response.ok) throw new Error(`Bibeltext nicht gefunden (HTTP ${response.status}).`);
+
+  const json = await response.json().catch(() => null);
+  const verses: BibleVerse[] = (Array.isArray(json) ? json : [])
+    .map((v: any) => ({ verse: Number(v.verse), text: stripHtml(String(v.text ?? '')) }))
+    .filter((v: BibleVerse) => v.verse > 0 && v.text);
+  if (verses.length === 0) throw new Error(`${book.name} hat kein Kapitel ${chapter}.`);
+
+  await db.bibleBook.upsert({
+    where: { translation_bookNr: { translation, bookNr } },
+    update: { name: book.name, chapterCount: book.chapters, fetchedAt: new Date() },
+    create: { translation, bookNr, name: book.name, chapterCount: book.chapters },
+  });
+  await db.bibleChapter.upsert({
+    where: { translation_bookNr_chapter: { translation, bookNr, chapter } },
+    update: { verses: JSON.stringify(verses) },
+    create: { translation, bookNr, chapter, verses: JSON.stringify(verses) },
+  });
+}
+
 export async function getChapter(translation: BibleTranslation, bookNr: number, chapter: number): Promise<BibleChapterData> {
   const info = bookByNr(bookNr);
   if (!info) throw new Error('Dieses Buch gibt es nicht.');
+  if (!booksFor(translation).some((b) => b.nr === bookNr)) {
+    throw new Error(`${info.name} steht nur in katholischen Ausgaben – wechsle die Übersetzung.`);
+  }
 
   let book = await db.bibleBook.findUnique({ where: { translation_bookNr: { translation, bookNr } } });
   let row = book ? await db.bibleChapter.findUnique({ where: { translation_bookNr_chapter: { translation, bookNr, chapter } } }) : null;
 
   if (!book || !row) {
-    const fetched = await cacheBook(translation, bookNr);
-    book = book ?? { id: '', translation, bookNr, name: fetched.name, chapterCount: fetched.chapterCount, fetchedAt: new Date() };
+    if (translationInfo(translation)?.source === 'bolls') {
+      await cacheBollsChapter(translation, bookNr, chapter);
+    } else {
+      const fetched = await cacheBook(translation, bookNr);
+      book = book ?? { id: '', translation, bookNr, name: fetched.name, chapterCount: fetched.chapterCount, fetchedAt: new Date() };
+    }
+    book = await db.bibleBook.findUnique({ where: { translation_bookNr: { translation, bookNr } } });
     row = await db.bibleChapter.findUnique({ where: { translation_bookNr_chapter: { translation, bookNr, chapter } } });
   }
   if (!row) throw new Error(`${info.name} hat kein Kapitel ${chapter}.`);

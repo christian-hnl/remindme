@@ -6,7 +6,7 @@ import { de } from 'date-fns/locale';
 import { Bookmark, BookmarkCheck, ChevronLeft, ChevronRight, Copy, Search, Trash2, X } from 'lucide-react';
 import type { BibleBookmark, BibleChapterData, DailyVerse } from '@/types';
 import { api, errorMessage } from '@/lib/client';
-import { BIBLE_BOOKS, BIBLE_TRANSLATIONS, DEFAULT_TRANSLATION, bookByNr, parseReference, type BibleTranslation } from '@/lib/bible/books';
+import { BIBLE_TRANSLATIONS, DEFAULT_TRANSLATION, bookByNr, booksFor, parseReference, translationInfo, type BibleTranslation } from '@/lib/bible/books';
 import { useToast } from '@/components/ui/Toast';
 
 interface BibleHubProps {
@@ -32,7 +32,7 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
   const [highlight, setHighlight] = useState<number | null>(null);
   const [query, setQuery] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [testament, setTestament] = useState<'at' | 'nt'>('nt');
+  const [testament, setTestament] = useState<'at' | 'nt' | 'spaet'>('nt');
   const [showBookmarks, setShowBookmarks] = useState(false);
   const versesRef = useRef<HTMLDivElement>(null);
 
@@ -103,11 +103,12 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
     setPickerOpen(false);
   };
 
-  /** Previous/next chapter, rolling over into the neighbouring book. */
+  /** Previous/next chapter, rolling over into the neighbouring book of this edition. */
   const step = (direction: -1 | 1) => {
     const nextChapter = chapter + direction;
     if (nextChapter >= 1 && nextChapter <= chapterCount) return go(bookNr, nextChapter);
-    const nextBook = bookByNr(bookNr + direction);
+    const list = booksFor(translation);
+    const nextBook = list[list.findIndex((b) => b.nr === bookNr) + direction];
     if (!nextBook) return;
     go(nextBook.nr, direction === 1 ? 1 : nextBook.chapters);
   };
@@ -151,6 +152,12 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
 
   const chooseTranslation = (id: BibleTranslation) => {
     setTranslation(id);
+    // Leaving a catholic edition while reading one of its extra books: go back to the gospel.
+    if (!booksFor(id).some((b) => b.nr === bookNr)) {
+      setBookNr(43);
+      setChapter(1);
+      setTestament('nt');
+    }
     try {
       localStorage.setItem(TRANSLATION_KEY, id);
     } catch {
@@ -158,7 +165,9 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
     }
   };
 
-  const books = BIBLE_BOOKS.filter((b) => b.testament === testament);
+  const canon = booksFor(translation);
+  const books = canon.filter((b) => b.testament === testament);
+  const hasDeutero = canon.some((b) => b.testament === 'spaet');
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 lg:grid lg:grid-cols-12 lg:items-start">
@@ -184,6 +193,8 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
           </div>
         </div>
 
+        <p className="-mt-2 px-4 pb-2 text-[12px] text-ink-3 sm:px-5">{translationInfo(translation)?.label}</p>
+
         <div className="px-4 pb-3 sm:px-5">
           <form onSubmit={submitQuery} className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3" />
@@ -202,12 +213,23 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
 
         {pickerOpen && (
           <div className="border-y border-line/10 bg-inset/60 px-4 py-3 sm:px-5">
-            <div className="segmented mb-3 grid-cols-2" role="group" aria-label="Testament">
+            <div className={`segmented mb-3 ${hasDeutero ? 'grid-cols-3' : 'grid-cols-2'}`} role="group" aria-label="Teil der Bibel">
               <button type="button" aria-pressed={testament === 'at'} onClick={() => setTestament('at')} className="segmented-item">
-                Altes Testament
+                Altes Test.
               </button>
+              {hasDeutero && (
+                <button
+                  type="button"
+                  aria-pressed={testament === 'spaet'}
+                  onClick={() => setTestament('spaet')}
+                  className="segmented-item"
+                  title="Tobit, Judit, Weisheit, Jesus Sirach, Baruch, 1. und 2. Makkabäer"
+                >
+                  Spätschriften
+                </button>
+              )}
               <button type="button" aria-pressed={testament === 'nt'} onClick={() => setTestament('nt')} className="segmented-item">
-                Neues Testament
+                Neues Test.
               </button>
             </div>
             <div className="grid max-h-[220px] grid-cols-2 gap-1 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4">
@@ -301,11 +323,24 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
           )}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/10 px-4 py-3 sm:px-5">
+        <p className="border-t border-line/10 px-4 pt-3 text-[12px] leading-relaxed text-ink-3 sm:px-5">
+          Nur gemeinfreie Ausgaben – „kath." enthält die Spätschriften (Tobit, Judit, Weisheit, Sirach, Baruch, 1./2. Makkabäer). Einheitsübersetzung und Zürcher Bibel sind
+          urheberrechtlich geschützt und dürfen hier nicht eingebunden werden.
+        </p>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5">
           <div className="scrollbar-none flex gap-1 overflow-x-auto" role="group" aria-label="Übersetzung">
             {BIBLE_TRANSLATIONS.map((t) => (
-              <button key={t.id} type="button" aria-pressed={translation === t.id} onClick={() => chooseTranslation(t.id)} className="tab h-8 px-3 text-[13px]">
+              <button
+                key={t.id}
+                type="button"
+                aria-pressed={translation === t.id}
+                onClick={() => chooseTranslation(t.id)}
+                title={`${t.label}${t.canon === 'catholic' ? ' · mit Spätschriften' : ''}`}
+                className="tab h-8 px-3 text-[13px]"
+              >
                 {t.short}
+                {t.canon === 'catholic' && <span className="text-[10px] opacity-70">kath.</span>}
               </button>
             ))}
           </div>

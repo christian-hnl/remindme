@@ -1,12 +1,33 @@
 // Shared by server and client – keep free of server-only imports.
 
-export type BibleTranslation = 'schlachter' | 'luther1545' | 'elberfelder1905';
+export type BibleTranslation = 'schlachter' | 'luther1545' | 'elberfelder1905' | 'menge' | 'vulgate' | 'douayrheims';
 
-export const BIBLE_TRANSLATIONS: { id: BibleTranslation; label: string; short: string }[] = [
-  { id: 'schlachter', label: 'Schlachter 1951', short: 'SCH51' },
-  { id: 'luther1545', label: 'Luther 1545', short: 'LUT45' },
-  { id: 'elberfelder1905', label: 'Elberfelder 1905', short: 'ELB05' },
+export interface TranslationInfo {
+  id: BibleTranslation;
+  label: string;
+  short: string;
+  language: 'de' | 'la' | 'en';
+  /** catholic editions carry the seven deuterocanonical books as well. */
+  canon: 'protestant' | 'catholic';
+  /** Where the text comes from – see lib/bible/source.ts. */
+  source: 'getbible' | 'bolls';
+  sourceId: string;
+}
+
+/**
+ * Only editions that are in the public domain. The Einheitsübersetzung and the modern Zürcher
+ * Bibel are still under copyright, so they can't be included.
+ */
+export const BIBLE_TRANSLATIONS: TranslationInfo[] = [
+  { id: 'schlachter', label: 'Schlachter 1951', short: 'SCH51', language: 'de', canon: 'protestant', source: 'getbible', sourceId: 'schlachter' },
+  { id: 'menge', label: 'Menge 1939', short: 'MENGE', language: 'de', canon: 'protestant', source: 'bolls', sourceId: 'MB' },
+  { id: 'luther1545', label: 'Luther 1545', short: 'LUT45', language: 'de', canon: 'protestant', source: 'getbible', sourceId: 'luther1545' },
+  { id: 'elberfelder1905', label: 'Elberfelder 1905', short: 'ELB05', language: 'de', canon: 'protestant', source: 'getbible', sourceId: 'elberfelder1905' },
+  { id: 'douayrheims', label: 'Douay-Rheims (englisch, kath.)', short: 'DR', language: 'en', canon: 'catholic', source: 'getbible', sourceId: 'douayrheims' },
+  { id: 'vulgate', label: 'Vulgata Clementina (lat., kath.)', short: 'VUL', language: 'la', canon: 'catholic', source: 'getbible', sourceId: 'vulgate' },
 ];
+
+export const translationInfo = (id: string) => BIBLE_TRANSLATIONS.find((t) => t.id === id);
 
 export const DEFAULT_TRANSLATION: BibleTranslation = 'schlachter';
 
@@ -16,7 +37,7 @@ export interface BibleBookInfo {
   /** Common short forms used when typing a reference. */
   aliases: string[];
   chapters: number;
-  testament: 'at' | 'nt';
+  testament: 'at' | 'nt' | 'spaet';
 }
 
 /** Chapter counts are the usual German ones; the reader corrects them from the real text. */
@@ -89,7 +110,29 @@ export const BIBLE_BOOKS: BibleBookInfo[] = [
   { nr: 66, name: 'Offenbarung', aliases: ['offb', 'apk', 'off'], chapters: 22, testament: 'nt' },
 ];
 
-export const bookByNr = (nr: number) => BIBLE_BOOKS.find((b) => b.nr === nr);
+export const bookByNr = (nr: number) => [...BIBLE_BOOKS, ...DEUTEROCANONICAL_BOOKS].find((b) => b.nr === nr);
+
+/**
+ * The seven deuterocanonical books ("Spätschriften"), only present in catholic editions.
+ * The numbers are the ones the source uses for them.
+ */
+export const DEUTEROCANONICAL_BOOKS: BibleBookInfo[] = [
+  { nr: 69, name: 'Tobit', aliases: ['tob', 'tobias'], chapters: 14, testament: 'spaet' },
+  { nr: 70, name: 'Judit', aliases: ['jdt', 'judith'], chapters: 16, testament: 'spaet' },
+  { nr: 73, name: 'Weisheit', aliases: ['weish', 'sap'], chapters: 19, testament: 'spaet' },
+  { nr: 74, name: 'Jesus Sirach', aliases: ['sir', 'sirach', 'ekklesiastikus'], chapters: 51, testament: 'spaet' },
+  { nr: 75, name: 'Baruch', aliases: ['bar'], chapters: 6, testament: 'spaet' },
+  { nr: 80, name: '1. Makkabäer', aliases: ['1makk', '1mak'], chapters: 16, testament: 'spaet' },
+  { nr: 81, name: '2. Makkabäer', aliases: ['2makk', '2mak'], chapters: 15, testament: 'spaet' },
+];
+
+/** The books a translation actually contains. */
+export function booksFor(translation: string): BibleBookInfo[] {
+  return translationInfo(translation)?.canon === 'catholic' ? [...BIBLE_BOOKS, ...DEUTEROCANONICAL_BOOKS] : BIBLE_BOOKS;
+}
+
+export const bookByNrIn = (translation: string, nr: number) => booksFor(translation).find((b) => b.nr === nr);
+
 
 const normalize = (value: string) =>
   value
@@ -105,7 +148,7 @@ const normalize = (value: string) =>
 export function findBook(query: string): BibleBookInfo | undefined {
   const needle = normalize(query);
   if (!needle) return undefined;
-  const candidates = BIBLE_BOOKS.map((book) => ({
+  const candidates = [...BIBLE_BOOKS, ...DEUTEROCANONICAL_BOOKS].map((book) => ({
     book,
     keys: [normalize(book.name), ...book.aliases.map(normalize)],
   }));

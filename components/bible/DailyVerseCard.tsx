@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { BookOpenText, Bookmark, BookmarkCheck, RefreshCw } from 'lucide-react';
 import type { BibleBookmark, DailyVerse } from '@/types';
 import { api, errorMessage } from '@/lib/client';
-import { BIBLE_TRANSLATIONS } from '@/lib/bible/books';
+import { DEFAULT_TRANSLATION, translationInfo } from '@/lib/bible/books';
 import { useToast } from '@/components/ui/Toast';
 
 interface DailyVerseCardProps {
@@ -28,7 +28,14 @@ export function DailyVerseCard({ bookmarks, onSaved, onRemoved, onOpenBible, com
     setLoading(true);
     setError(null);
     try {
-      setVerse(await api<DailyVerse>(`/api/v1/bible/daily?offset=${nextOffset}`));
+      // Follows the edition picked in the Bible tab.
+      let chosen = DEFAULT_TRANSLATION as string;
+      try {
+        chosen = localStorage.getItem('lifetracker:bible-translation') || chosen;
+      } catch {
+        // ignore
+      }
+      setVerse(await api<DailyVerse>(`/api/v1/bible/daily?offset=${nextOffset}&translation=${chosen}`));
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -64,7 +71,7 @@ export function DailyVerseCard({ bookmarks, onSaved, onRemoved, onOpenBible, com
     }
   };
 
-  const translationLabel = BIBLE_TRANSLATIONS.find((t) => t.id === verse?.translation)?.label ?? '';
+  const translationLabel = translationInfo(verse?.translation ?? '')?.label ?? '';
 
   return (
     <section className={`card ${compact ? '' : 'overflow-hidden'}`} aria-label="Tagesvers">
