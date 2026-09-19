@@ -6,6 +6,7 @@ import type { BibleBookmark, DailyVerse } from '@/types';
 import { api, errorMessage } from '@/lib/client';
 import { DEFAULT_TRANSLATION, translationInfo } from '@/lib/bible/books';
 import { useToast } from '@/components/ui/Toast';
+import { TRANSLATION_EVENT } from './BibleHub';
 
 interface DailyVerseCardProps {
   bookmarks: BibleBookmark[];
@@ -45,6 +46,13 @@ export function DailyVerseCard({ bookmarks, onSaved, onRemoved, onOpenBible, com
 
   useEffect(() => {
     load(offset);
+  }, [load, offset]);
+
+  // Reload when the Bible tab switches to another edition.
+  useEffect(() => {
+    const reload = () => load(offset);
+    window.addEventListener(TRANSLATION_EVENT, reload);
+    return () => window.removeEventListener(TRANSLATION_EVENT, reload);
   }, [load, offset]);
 
   const saved = verse ? bookmarks.find((b) => b.bookNr === verse.bookNr && b.chapter === verse.chapter && b.verse === verse.verse) : undefined;

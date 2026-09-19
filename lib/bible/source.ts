@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { BIBLE_TRANSLATIONS, DAILY_VERSES, bookByNr, booksFor, dailyVerseIndex, formatReference, translationInfo, type BibleTranslation } from './books';
+import { BIBLE_TRANSLATIONS, DAILY_VERSES, GRUENEWALD_FILES, bookByNr, booksFor, dailyVerseIndex, formatReference, translationInfo, type BibleTranslation } from './books';
 
 const GETBIBLE_API = 'https://api.getbible.net/v2';
 const BOLLS_API = 'https://bolls.life';
@@ -111,6 +111,72 @@ async function cacheBollsChapter(translation: BibleTranslation, bookNr: number, 
   });
 }
 
+const ROUNDTRIP_BASE = 'https://raw.githubusercontent.com/bibel';
+
+const decodeEntities = (value: string) =>
+  value
+    .replace(/&ndash;/g, '–')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&auml;/g, 'ä')
+    .replace(/&ouml;/g, 'ö')
+    .replace(/&uuml;/g, 'ü')
+    .replace(/&Auml;/g, 'Ä')
+    .replace(/&Ouml;/g, 'Ö')
+    .replace(/&Uuml;/g, 'Ü')
+    .replace(/&szlig;/g, 'ß')
+    .replace(/&quot;/g, '"')
+    .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(Number(code)))
+    .replace(/&amp;/g, '&');
+
+/**
+ * Editions published as "RoundtripHTML" keep one file per chapter, with every verse in a
+ * <div class="v" id="vN">. Section headings sit inside as <h2> and are dropped.
+ */
+async function cacheRoundtripChapter(translation: BibleTranslation, bookNr: number, chapter: number) {
+  const info = translationInfo(translation);
+  const file = GRUENEWALD_FILES[bookNr];
+  const book = bookByNr(bookNr);
+  if (!info || !file || !book) throw new Error('Diese Ausgabe kennt das Buch nicht.');
+
+  const url = `${ROUNDTRIP_BASE}/${info.sourceId}/RoundtripHTML/${file.folder}/${encodeURIComponent(file.abbr)}_${chapter}.html`;
+  let response: Response;
+  try {
+    response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch {
+    throw new Error('Bibeltext konnte nicht geladen werden – bist du online?');
+  }
+  if (response.status === 404) throw new Error(`${book.name} hat kein Kapitel ${chapter}.`);
+  if (!response.ok) throw new Error(`Bibeltext nicht gefunden (HTTP ${response.status}).`);
+
+  const html = await response.text();
+  const verses: BibleVerse[] = [];
+  for (const match of html.matchAll(/<div class="v" id="v(\d+)">([\s\S]*?)<\/div>/g)) {
+    const text = decodeEntities(
+      match[2]
+        .replace(/<h2[\s\S]*?<\/h2>/g, ' ')
+        .replace(/<span class="vn">\d+<\/span>/g, ' ')
+        // Footnote markers would otherwise leave a stray digit in the verse.
+        .replace(/<sup[\s\S]*?<\/sup>/g, '')
+        .replace(/<[^>]+>/g, ' ')
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (text) verses.push({ verse: Number(match[1]), text });
+  }
+  if (verses.length === 0) throw new Error(`${book.name} ${chapter} enthält keinen Text.`);
+
+  await db.bibleBook.upsert({
+    where: { translation_bookNr: { translation, bookNr } },
+    update: { name: book.name, chapterCount: book.chapters, fetchedAt: new Date() },
+    create: { translation, bookNr, name: book.name, chapterCount: book.chapters },
+  });
+  await db.bibleChapter.upsert({
+    where: { translation_bookNr_chapter: { translation, bookNr, chapter } },
+    update: { verses: JSON.stringify(verses) },
+    create: { translation, bookNr, chapter, verses: JSON.stringify(verses) },
+  });
+}
+
 export async function getChapter(translation: BibleTranslation, bookNr: number, chapter: number): Promise<BibleChapterData> {
   const info = bookByNr(bookNr);
   if (!info) throw new Error('Dieses Buch gibt es nicht.');
@@ -122,8 +188,11 @@ export async function getChapter(translation: BibleTranslation, bookNr: number, 
   let row = book ? await db.bibleChapter.findUnique({ where: { translation_bookNr_chapter: { translation, bookNr, chapter } } }) : null;
 
   if (!book || !row) {
-    if (translationInfo(translation)?.source === 'bolls') {
+    const source = translationInfo(translation)?.source;
+    if (source === 'bolls') {
       await cacheBollsChapter(translation, bookNr, chapter);
+    } else if (source === 'roundtriphtml') {
+      await cacheRoundtripChapter(translation, bookNr, chapter);
     } else {
       const fetched = await cacheBook(translation, bookNr);
       book = book ?? { id: '', translation, bookNr, name: fetched.name, chapterCount: fetched.chapterCount, fetchedAt: new Date() };

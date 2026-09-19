@@ -3,8 +3,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { de } from 'date-fns/locale';
-import { Bookmark, BookmarkCheck, ChevronLeft, ChevronRight, Copy, Search, Trash2, X } from 'lucide-react';
-import type { BibleBookmark, BibleChapterData, DailyVerse } from '@/types';
+import { Bookmark, BookmarkCheck, ChevronLeft, ChevronRight, Copy, PenLine, Search, Trash2 } from 'lucide-react';
+import type { BibleBookmark, BibleChapterData, Note } from '@/types';
+import { StudyNotePanel } from './StudyNotePanel';
 import { api, errorMessage } from '@/lib/client';
 import { BIBLE_TRANSLATIONS, DEFAULT_TRANSLATION, bookByNr, booksFor, parseReference, translationInfo, type BibleTranslation } from '@/lib/bible/books';
 import { useToast } from '@/components/ui/Toast';
@@ -16,12 +17,18 @@ interface BibleHubProps {
   /** Chapter to jump to, e.g. from the daily verse on "Heute". */
   jumpTo?: { bookNr: number; chapter: number; verse?: number } | null;
   onJumpHandled?: () => void;
+  /** Notes, so a passage can be studied and written about side by side. */
+  notes: Note[];
+  onAddNote: (note: Partial<Note>) => Promise<Note | null>;
+  onUpdateNote: (id: string, updates: Partial<Note>) => Promise<void>;
 }
 
 const POSITION_KEY = 'lifetracker:bible-position';
 const TRANSLATION_KEY = 'lifetracker:bible-translation';
+const STUDY_NOTE_KEY = 'lifetracker:bible-note';
+export const TRANSLATION_EVENT = 'lifetracker:bible-translation-changed';
 
-export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled }: BibleHubProps) {
+export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled, notes, onAddNote, onUpdateNote }: BibleHubProps) {
   const toast = useToast();
   const [translation, setTranslation] = useState<BibleTranslation>(DEFAULT_TRANSLATION);
   const [bookNr, setBookNr] = useState(43);
@@ -34,6 +41,8 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [testament, setTestament] = useState<'at' | 'nt' | 'spaet'>('nt');
   const [showBookmarks, setShowBookmarks] = useState(false);
+  const [studyNoteId, setStudyNoteId] = useState<string | null>(null);
+  const [insert, setInsert] = useState<{ text: string; reference: string } | null>(null);
   const versesRef = useRef<HTMLDivElement>(null);
 
   // Restore the last reading position.
@@ -47,6 +56,8 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
           setChapter(c);
         }
       }
+      const storedNote = localStorage.getItem(STUDY_NOTE_KEY);
+      if (storedNote) setStudyNoteId(storedNote);
       const storedTranslation = localStorage.getItem(TRANSLATION_KEY) as BibleTranslation | null;
       if (storedTranslation && BIBLE_TRANSLATIONS.some((t) => t.id === storedTranslation)) setTranslation(storedTranslation);
     } catch {
@@ -150,6 +161,16 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
     }
   };
 
+  const chooseStudyNote = (id: string | null) => {
+    setStudyNoteId(id);
+    try {
+      if (id) localStorage.setItem(STUDY_NOTE_KEY, id);
+      else localStorage.removeItem(STUDY_NOTE_KEY);
+    } catch {
+      // ignore
+    }
+  };
+
   const chooseTranslation = (id: BibleTranslation) => {
     setTranslation(id);
     // Leaving a catholic edition while reading one of its extra books: go back to the gospel.
@@ -163,6 +184,8 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
     } catch {
       // ignore
     }
+    // The daily verse card follows the chosen edition.
+    window.dispatchEvent(new CustomEvent(TRANSLATION_EVENT));
   };
 
   const canon = booksFor(translation);
@@ -300,6 +323,15 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
                       <span className="flex flex-shrink-0 items-start gap-0.5">
                         <button
                           type="button"
+                          onClick={() => setInsert({ text: v.text, reference: `${data.bookName} ${chapter},${v.verse}` })}
+                          className="icon-btn h-7 w-7 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                          aria-label={`Vers ${v.verse} in die Notiz schreiben`}
+                          title="In die Notiz schreiben"
+                        >
+                          <PenLine className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => copyVerse(v.verse, v.text)}
                           className="icon-btn h-7 w-7 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                           aria-label={`Vers ${v.verse} kopieren`}
@@ -355,7 +387,19 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
         </div>
       </section>
 
-      <section className="card min-w-0 lg:col-span-4" aria-label="Merkverse">
+      <div className="flex min-w-0 flex-col gap-4 sm:gap-6 lg:col-span-4">
+        <StudyNotePanel
+          notes={notes}
+          noteId={studyNoteId}
+          onSelectNote={chooseStudyNote}
+          onAddNote={onAddNote}
+          onUpdateNote={onUpdateNote}
+          passage={`${data?.bookName ?? book?.name ?? 'Bibel'} ${chapter}`}
+          insert={insert}
+          onInserted={() => setInsert(null)}
+        />
+
+      <section className="card min-w-0" aria-label="Merkverse">
         <div className="flex items-start justify-between gap-3 p-4 pb-2 sm:p-5 sm:pb-2">
           <div>
             <p className="eyebrow">Gemerkt</p>
@@ -408,6 +452,7 @@ export function BibleHub({ bookmarks, onSaved, onRemoved, jumpTo, onJumpHandled 
           </ul>
         )}
       </section>
+      </div>
     </div>
   );
 }

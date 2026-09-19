@@ -1203,6 +1203,9 @@ function Dashboard({ initialData }: DashboardContainerProps) {
               onRemoved={handleBookmarkRemoved}
               jumpTo={bibleJump}
               onJumpHandled={() => setBibleJump(null)}
+              notes={data.notes}
+              onAddNote={handleAddNote}
+              onUpdateNote={handleUpdateNote}
             />
           </>
         )}

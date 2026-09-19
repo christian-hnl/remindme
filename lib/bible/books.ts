@@ -1,6 +1,6 @@
 // Shared by server and client – keep free of server-only imports.
 
-export type BibleTranslation = 'schlachter' | 'luther1545' | 'elberfelder1905' | 'menge' | 'vulgate' | 'douayrheims';
+export type BibleTranslation = 'schlachter' | 'menge' | 'gruenewald' | 'luther1545' | 'elberfelder1905' | 'vulgate' | 'douayrheims';
 
 export interface TranslationInfo {
   id: BibleTranslation;
@@ -10,7 +10,7 @@ export interface TranslationInfo {
   /** catholic editions carry the seven deuterocanonical books as well. */
   canon: 'protestant' | 'catholic';
   /** Where the text comes from – see lib/bible/source.ts. */
-  source: 'getbible' | 'bolls';
+  source: 'getbible' | 'bolls' | 'roundtriphtml';
   sourceId: string;
 }
 
@@ -21,6 +21,15 @@ export interface TranslationInfo {
 export const BIBLE_TRANSLATIONS: TranslationInfo[] = [
   { id: 'schlachter', label: 'Schlachter 1951', short: 'SCH51', language: 'de', canon: 'protestant', source: 'getbible', sourceId: 'schlachter' },
   { id: 'menge', label: 'Menge 1939', short: 'MENGE', language: 'de', canon: 'protestant', source: 'bolls', sourceId: 'MB' },
+  {
+    id: 'gruenewald',
+    label: 'Grünewald – Rießler/Storr 1934 (kath.)',
+    short: 'GRÜN',
+    language: 'de',
+    canon: 'catholic',
+    source: 'roundtriphtml',
+    sourceId: 'Gruenewald',
+  },
   { id: 'luther1545', label: 'Luther 1545', short: 'LUT45', language: 'de', canon: 'protestant', source: 'getbible', sourceId: 'luther1545' },
   { id: 'elberfelder1905', label: 'Elberfelder 1905', short: 'ELB05', language: 'de', canon: 'protestant', source: 'getbible', sourceId: 'elberfelder1905' },
   { id: 'douayrheims', label: 'Douay-Rheims (englisch, kath.)', short: 'DR', language: 'en', canon: 'catholic', source: 'getbible', sourceId: 'douayrheims' },
@@ -219,3 +228,36 @@ export function dailyVerseIndex(date = new Date(), offset = 0) {
   // Spread consecutive days across the list instead of walking through it in order.
   return (((key * 7919) % DAILY_VERSES.length) + offset + DAILY_VERSES.length * 2) % DAILY_VERSES.length;
 }
+
+/**
+ * File names of the Grünewald edition (RoundtripHTML): book number → folder and abbreviation,
+ * e.g. 43 → nt/Joh_3.html. Its deuterocanonical books use the same numbers as the other
+ * catholic editions here.
+ */
+export const GRUENEWALD_FILES: Record<number, { folder: 'ot' | 'nt'; abbr: string }> = {
+  1: { folder: 'ot', abbr: 'Gen' }, 2: { folder: 'ot', abbr: 'Ex' }, 3: { folder: 'ot', abbr: 'Lev' },
+  4: { folder: 'ot', abbr: 'Num' }, 5: { folder: 'ot', abbr: 'Dtn' }, 6: { folder: 'ot', abbr: 'Jos' },
+  7: { folder: 'ot', abbr: 'Ri' }, 8: { folder: 'ot', abbr: 'Rut' }, 9: { folder: 'ot', abbr: '1Sam' },
+  10: { folder: 'ot', abbr: '2Sam' }, 11: { folder: 'ot', abbr: '1Kön' }, 12: { folder: 'ot', abbr: '2Kön' },
+  13: { folder: 'ot', abbr: '1Chr' }, 14: { folder: 'ot', abbr: '2Chr' }, 15: { folder: 'ot', abbr: 'Esra' },
+  16: { folder: 'ot', abbr: 'Neh' }, 17: { folder: 'ot', abbr: 'Est' }, 18: { folder: 'ot', abbr: 'Ijob' },
+  19: { folder: 'ot', abbr: 'Ps' }, 20: { folder: 'ot', abbr: 'Spr' }, 21: { folder: 'ot', abbr: 'Koh' },
+  22: { folder: 'ot', abbr: 'Hld' }, 23: { folder: 'ot', abbr: 'Jes' }, 24: { folder: 'ot', abbr: 'Jer' },
+  25: { folder: 'ot', abbr: 'Klgl' }, 26: { folder: 'ot', abbr: 'Ez' }, 27: { folder: 'ot', abbr: 'Dan' },
+  28: { folder: 'ot', abbr: 'Hos' }, 29: { folder: 'ot', abbr: 'Joel' }, 30: { folder: 'ot', abbr: 'Amos' },
+  31: { folder: 'ot', abbr: 'Obd' }, 32: { folder: 'ot', abbr: 'Jona' }, 33: { folder: 'ot', abbr: 'Mi' },
+  34: { folder: 'ot', abbr: 'Nah' }, 35: { folder: 'ot', abbr: 'Hab' }, 36: { folder: 'ot', abbr: 'Zef' },
+  37: { folder: 'ot', abbr: 'Hag' }, 38: { folder: 'ot', abbr: 'Sach' }, 39: { folder: 'ot', abbr: 'Mal' },
+  40: { folder: 'nt', abbr: 'Mt' }, 41: { folder: 'nt', abbr: 'Mk' }, 42: { folder: 'nt', abbr: 'Lk' },
+  43: { folder: 'nt', abbr: 'Joh' }, 44: { folder: 'nt', abbr: 'Apg' }, 45: { folder: 'nt', abbr: 'Röm' },
+  46: { folder: 'nt', abbr: '1Kor' }, 47: { folder: 'nt', abbr: '2Kor' }, 48: { folder: 'nt', abbr: 'Gal' },
+  49: { folder: 'nt', abbr: 'Eph' }, 50: { folder: 'nt', abbr: 'Phil' }, 51: { folder: 'nt', abbr: 'Kol' },
+  52: { folder: 'nt', abbr: '1Thess' }, 53: { folder: 'nt', abbr: '2Thess' }, 54: { folder: 'nt', abbr: '1Tim' },
+  55: { folder: 'nt', abbr: '2Tim' }, 56: { folder: 'nt', abbr: 'Tit' }, 57: { folder: 'nt', abbr: 'Phlm' },
+  58: { folder: 'nt', abbr: 'Hebr' }, 59: { folder: 'nt', abbr: 'Jak' }, 60: { folder: 'nt', abbr: '1Petr' },
+  61: { folder: 'nt', abbr: '2Petr' }, 62: { folder: 'nt', abbr: '1Joh' }, 63: { folder: 'nt', abbr: '2Joh' },
+  64: { folder: 'nt', abbr: '3Joh' }, 65: { folder: 'nt', abbr: 'Jud' }, 66: { folder: 'nt', abbr: 'Offb' },
+  69: { folder: 'ot', abbr: 'Tob' }, 70: { folder: 'ot', abbr: 'Jdt' }, 73: { folder: 'ot', abbr: 'Weish' },
+  74: { folder: 'ot', abbr: 'Sir' }, 75: { folder: 'ot', abbr: 'Bar' }, 80: { folder: 'ot', abbr: '1Makk' },
+  81: { folder: 'ot', abbr: '2Makk' },
+};
