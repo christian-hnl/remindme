@@ -42,6 +42,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     habits,
     birthdays,
     skills,
+    bibleBookmarks,
   ] = await Promise.all([
     db.task.findMany({
       where: { userId, status: { not: 'archived' } },
@@ -108,6 +109,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     }),
     db.birthday.findMany({ where: { userId }, orderBy: [{ month: 'asc' }, { day: 'asc' }] }),
     loadSkills(userId),
+    db.bibleBookmark.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } }),
   ]);
 
   // Accounts with a bank-reported balance use it; imported accounts sum their bookings.
@@ -241,6 +243,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     habits: habits.map(({ logs, ...habit }) => ({ ...habit, days: logs.map((l) => l.day) })),
     birthdays,
     skills,
+    bibleBookmarks,
     untisConfig: untisConfig ? { ...toSafeUntisConfig(untisConfig)!, availableGroups, parallelSlots } : null,
     banking: {
       configured:

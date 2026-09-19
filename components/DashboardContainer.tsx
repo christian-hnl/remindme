@@ -6,7 +6,9 @@ import { de } from 'date-fns/locale';
 import type {
   BankAccountSummary,
   BankConnectionSummary,
+  BibleBookmark,
   Birthday,
+  DailyVerse,
   DashboardSummary,
   Exam,
   Grade,
@@ -45,6 +47,8 @@ import { FinanceAnalysis, type TransactionFilter } from './wealth/FinanceAnalysi
 import { TransactionsBrowser } from './wealth/TransactionsBrowser';
 import { TransactionEditModal, type EditableTransaction } from './wealth/TransactionEditModal';
 import { SkillsHub } from './skills/SkillsHub';
+import { BibleHub } from './bible/BibleHub';
+import { DailyVerseCard } from './bible/DailyVerseCard';
 import { WelcomeCard } from './onboarding/WelcomeCard';
 import { PotDetailsModal } from './wealth/PotDetailsModal';
 import { CreatePotModal } from './wealth/CreatePotModal';
@@ -150,6 +154,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
   const [txFilter, setTxFilter] = useState<TransactionFilter>({});
   const [editingTx, setEditingTx] = useState<EditableTransaction | null>(null);
   const [financeVersion, setFinanceVersion] = useState(0);
+  const [bibleJump, setBibleJump] = useState<{ bookNr: number; chapter: number; verse?: number } | null>(null);
 
   const detailsPot = data.savingsPots.find((p) => p.id === detailsPotId) ?? null;
   const clearPending = useCallback(() => setPending(null), []);
@@ -632,6 +637,23 @@ function Dashboard({ initialData }: DashboardContainerProps) {
     [optimistic]
   );
 
+  // ---------------------------------------------------------------- bible
+  const handleBookmarkSaved = useCallback((bookmark: BibleBookmark) => {
+    setData((d) => ({ ...d, bibleBookmarks: [bookmark, ...d.bibleBookmarks.filter((b) => b.id !== bookmark.id)] }));
+  }, []);
+
+  const handleBookmarkRemoved = useCallback((id: string) => {
+    setData((d) => ({ ...d, bibleBookmarks: d.bibleBookmarks.filter((b) => b.id !== id) }));
+  }, []);
+
+  const openVerseInBible = useCallback(
+    (verse: DailyVerse) => {
+      setBibleJump({ bookNr: verse.bookNr, chapter: verse.chapter, verse: verse.verse });
+      setActiveMode('bible');
+    },
+    [setActiveMode]
+  );
+
   // ---------------------------------------------------------------- money
   const handleMovePotMoney = useCallback(
     async (potId: string, amount: number, direction: 'deposit' | 'withdraw' = 'deposit') => {
@@ -892,7 +914,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
             <div className="flex flex-col gap-4 sm:gap-6 md:grid md:grid-cols-2 md:items-start xl:grid-cols-12">
               <div className="contents xl:col-span-7 xl:flex xl:flex-col xl:gap-6">
                 <div className="order-4 min-w-0 md:col-span-2">{timetable}</div>
-                <div className="order-6 min-w-0">{miniCalendar}</div>
+                <div className="order-7 min-w-0">{miniCalendar}</div>
               </div>
               <div className="contents xl:col-span-5 xl:flex xl:flex-col xl:gap-6">
                 <div className="order-1 min-w-0">{taskMatrix}</div>
@@ -900,7 +922,16 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 <div className="order-3 min-w-0">
                   <UpcomingCard exams={data.exams} birthdays={data.birthdays} onOpenStudy={() => setActiveMode('study')} onOpenLife={() => setActiveMode('life')} />
                 </div>
-                <div className="order-5 min-w-0">{wallet}</div>
+                <div className="order-5 min-w-0">
+                  <DailyVerseCard
+                    compact
+                    bookmarks={data.bibleBookmarks}
+                    onSaved={handleBookmarkSaved}
+                    onRemoved={handleBookmarkRemoved}
+                    onOpenBible={openVerseInBible}
+                  />
+                </div>
+                <div className="order-6 min-w-0">{wallet}</div>
               </div>
             </div>
           </div>
@@ -1151,6 +1182,27 @@ function Dashboard({ initialData }: DashboardContainerProps) {
               onSkillsChange={(update) => setData((d) => ({ ...d, skills: update(d.skills) }))}
               createRequest={pending?.kind === 'skill'}
               onCreateRequestHandled={clearPending}
+            />
+          </>
+        )}
+
+        {activeMode === 'bible' && (
+          <>
+            <ModeHeader mode="bible" />
+            <div className="mb-4 sm:mb-6">
+              <DailyVerseCard
+                bookmarks={data.bibleBookmarks}
+                onSaved={handleBookmarkSaved}
+                onRemoved={handleBookmarkRemoved}
+                onOpenBible={openVerseInBible}
+              />
+            </div>
+            <BibleHub
+              bookmarks={data.bibleBookmarks}
+              onSaved={handleBookmarkSaved}
+              onRemoved={handleBookmarkRemoved}
+              jumpTo={bibleJump}
+              onJumpHandled={() => setBibleJump(null)}
             />
           </>
         )}

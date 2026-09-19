@@ -12,7 +12,7 @@ interface MobileDockProps {
 }
 
 const LEFT: WorkspaceMode[] = ['all', 'study', 'life'];
-const RIGHT: WorkspaceMode[] = ['wealth', 'skills', 'notes'];
+const RIGHT: WorkspaceMode[] = ['wealth', 'skills', 'bible', 'notes'];
 
 export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMode, onOpenQuickAdd }) => {
   const item = (mode: WorkspaceMode) => {
@@ -24,12 +24,12 @@ export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMod
         type="button"
         onClick={() => setActiveMode(mode)}
         aria-current={active ? 'page' : undefined}
-        className={`relative flex min-h-[58px] min-w-0 flex-col items-center justify-center gap-1 text-[10.5px] font-bold transition-colors ${
+        className={`relative flex min-h-[58px] min-w-0 flex-col items-center justify-center gap-0.5 text-[9.5px] font-bold leading-tight transition-colors ${
           active ? 'text-ink' : 'text-ink-3'
         }`}
       >
         {active && <span className="absolute top-0 h-[3px] w-8 rounded-b-full bg-accent" aria-hidden />}
-        <Icon className="h-[21px] w-[21px]" strokeWidth={active ? 2.3 : 1.8} />
+        <Icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.3 : 1.8} />
         {label}
       </button>
     );
@@ -37,7 +37,7 @@ export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMod
 
   return (
     <nav aria-label="Ansichten" className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-line/10 bg-sheet/90 backdrop-blur-md lg:hidden">
-      <div className="mx-auto grid max-w-lg grid-cols-7 items-center px-0.5">
+      <div className="mx-auto grid max-w-lg grid-cols-8 items-center px-0.5">
         {LEFT.map(item)}
         <div className="flex justify-center">
           <button

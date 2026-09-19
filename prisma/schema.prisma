@@ -35,6 +35,7 @@ model User {
   categoryBudgets CategoryBudget[]
   categoryRules   CategoryRule[]
   skills          Skill[]
+  bibleBookmarks  BibleBookmark[]
 }
 
 model WebUntisConfig {
@@ -171,6 +172,46 @@ model Exam {
   topicItems ExamTopic[]
 
   @@unique([userId, externalUntisId])
+}
+
+/// Bible text cached from getbible.net, so reading stays fast and works offline.
+model BibleBook {
+  id           String   @id @default(uuid())
+  translation  String
+  bookNr       Int
+  name         String
+  chapterCount Int
+  fetchedAt    DateTime @default(now())
+
+  @@unique([translation, bookNr])
+}
+
+model BibleChapter {
+  id          String   @id @default(uuid())
+  translation String
+  bookNr      Int
+  chapter     Int
+  /// JSON array of { verse, text }
+  verses      String
+
+  @@unique([translation, bookNr, chapter])
+}
+
+/// A verse the user saved, with an optional note.
+model BibleBookmark {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  translation String
+  bookNr      Int
+  bookName    String
+  chapter     Int
+  verse       Int
+  text        String
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, bookNr, chapter, verse])
 }
 
 /// One checkable item of exam material ("Stoff"), e.g. a chapter or topic.

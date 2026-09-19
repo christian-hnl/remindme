@@ -1,7 +1,7 @@
 export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskStatus = 'backlog' | 'in_progress' | 'done' | 'archived';
 export type TransactionType = 'income' | 'expense' | 'transfer_to_pot' | 'transfer_from_pot' | 'transfer' | 'investment';
-export type WorkspaceMode = 'all' | 'study' | 'life' | 'wealth' | 'skills' | 'notes';
+export type WorkspaceMode = 'all' | 'study' | 'life' | 'wealth' | 'skills' | 'bible' | 'notes';
 export type RepeatPattern = 'none' | 'daily' | 'weekly';
 export type BankSource = 'enablebanking' | 'george' | 'traderepublic' | 'finanzguru' | 'file';
 export type ExamKind = 'schularbeit' | 'test' | 'pruefung' | 'referat' | 'sonstiges';
@@ -231,6 +231,40 @@ export interface Birthday {
   note?: string | null;
 }
 
+// ---------------------------------------------------------------- bible
+
+export interface BibleBookmark {
+  id: string;
+  translation: string;
+  bookNr: number;
+  bookName: string;
+  chapter: number;
+  verse: number;
+  text: string;
+  note?: string | null;
+  createdAt: string;
+}
+
+export interface DailyVerse {
+  reference: string;
+  bookNr: number;
+  bookName: string;
+  chapter: number;
+  verse: number;
+  endVerse: number | null;
+  text: string;
+  translation: string;
+}
+
+export interface BibleChapterData {
+  translation: string;
+  bookNr: number;
+  bookName: string;
+  chapter: number;
+  chapterCount: number;
+  verses: { verse: number; text: string }[];
+}
+
 // ---------------------------------------------------------------- finance analysis
 
 export type AnalyticsRange = 'month' | 'last-month' | '3m' | '6m' | '12m';
@@ -420,6 +454,7 @@ export interface DashboardSummary {
   habits: Habit[];
   birthdays: Birthday[];
   skills: Skill[];
+  bibleBookmarks: BibleBookmark[];
   untisConfig: WebUntisConfig | null;
   banking: {
     /** Enable Banking credentials are stored (or provided via environment). */
