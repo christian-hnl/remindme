@@ -82,33 +82,6 @@ export function getSchoolWeek(reference = new Date()) {
   return { monday, friday };
 }
 
-/** Joins consecutive lessons of the same subject (double periods) into one block. */
-function mergeDoubleLessons(lessons: LessonInput[]): LessonInput[] {
-  const sorted = [...lessons].sort(
-    (a, b) => a.dayOfWeek - b.dayOfWeek || toMinutes(a.startTime) - toMinutes(b.startTime)
-  );
-  const merged: LessonInput[] = [];
-  for (const lesson of sorted) {
-    const prev = merged[merged.length - 1];
-    if (
-      prev &&
-      prev.dayOfWeek === lesson.dayOfWeek &&
-      prev.subjectCode === lesson.subjectCode &&
-      prev.room === lesson.room &&
-      prev.isCancelled === lesson.isCancelled &&
-      prev.studentGroup === lesson.studentGroup &&
-      prev.isExam === lesson.isExam &&
-      toMinutes(lesson.startTime) - toMinutes(prev.endTime) <= 15 &&
-      toMinutes(lesson.startTime) >= toMinutes(prev.startTime)
-    ) {
-      prev.endTime = lesson.endTime;
-      continue;
-    }
-    merged.push({ ...lesson });
-  }
-  return merged;
-}
-
 // ---------------------------------------------------------------------------
 // WebUntis JSON-RPC 2.0
 // ---------------------------------------------------------------------------
@@ -314,7 +287,8 @@ async function fetchApiLessons(
       isExam,
     });
   }
-  return { lessons: mergeDoubleLessons(Array.from(unique.values())), usedScope };
+  // Double periods stay two lessons – that is how the timetable is read and taught.
+  return { lessons: Array.from(unique.values()), usedScope };
 }
 
 interface ExamInput {
@@ -545,7 +519,7 @@ function icalEventsToLessons(events: IcalEvent[], reference = new Date()): Lesso
       isExam: false,
     });
   }
-  return mergeDoubleLessons(Array.from(unique.values()));
+  return Array.from(unique.values());
 }
 
 // ---------------------------------------------------------------------------
@@ -1007,6 +981,13 @@ export async function syncWebUntisData(userId: string): Promise<WebUntisSyncResu
     subjectByCode.set(lesson.subjectCode, subject);
   }
 
+  // A Hausübung points at the lesson it was given in, and the re-sync below replaces every
+  // synced lesson – so remember those links and tie them to the new rows afterwards.
+  const linkedTasks = await db.task.findMany({
+    where: { userId, scheduleBlockId: { not: null } },
+    select: { id: true, scheduleBlock: { select: { dayOfWeek: true, startTime: true, subjectCode: true } } },
+  });
+
   // Replace previously synced lessons atomically; manual blocks stay untouched.
   await db.$transaction([
     db.scheduleBlock.deleteMany({ where: { userId, externalUntisId: { not: null } } }),
@@ -1033,6 +1014,20 @@ export async function syncWebUntisData(userId: string): Promise<WebUntisSyncResu
       }),
     }),
   ]);
+
+  if (linkedTasks.length > 0) {
+    const lessonKeyOf = (b: { dayOfWeek: number; startTime: string; subjectCode: string | null }) =>
+      `${b.dayOfWeek}|${b.startTime}|${b.subjectCode ?? ''}`;
+    const fresh = await db.scheduleBlock.findMany({
+      where: { userId, externalUntisId: { not: null } },
+      select: { id: true, dayOfWeek: true, startTime: true, subjectCode: true },
+    });
+    const byKey = new Map(fresh.map((b) => [lessonKeyOf(b), b.id]));
+    for (const task of linkedTasks) {
+      const blockId = task.scheduleBlock ? byKey.get(lessonKeyOf(task.scheduleBlock)) : undefined;
+      if (blockId) await db.task.update({ where: { id: task.id }, data: { scheduleBlockId: blockId } });
+    }
+  }
 
   // Exams: from the announcement API plus any timetable entry flagged as an exam. Matched by
   // externalUntisId so a re-sync updates the same entry (dates move) instead of duplicating it.
