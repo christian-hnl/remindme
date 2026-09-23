@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { de } from 'date-fns/locale';
-import { Award, CloudOff, Plus, RefreshCw } from 'lucide-react';
+import { Award, ChevronDown, CloudOff, Plus, RefreshCw } from 'lucide-react';
 import type { GradeKind, Subject, VmmConfig } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { DEFAULT_GRADE_WEIGHT, GRADE_KINDS, GRADE_KIND_LABELS, GRADE_NAMES } from '@/lib/school';
@@ -60,6 +60,8 @@ export const GradesCard: React.FC<GradesCardProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [openSubjectId, setOpenSubjectId] = useState<string | null>(null);
+  // Fächer ohne Note sind da, drängeln sich aber nicht vor die, um die es geht.
+  const [showEmpty, setShowEmpty] = useState(false);
   const [form, setForm] = useState({ subjectId: '', value: 0, kind: 'test' as GradeKind, date: toDateInput(new Date()), title: '' });
   const [saving, setSaving] = useState(false);
 
@@ -112,10 +114,83 @@ export const GradesCard: React.FC<GradesCardProps> = ({
   };
 
   const orphans = useMemo(() => unlinkedVmmGroups(vmmLinks), [vmmLinks]);
+  const graded = rows.filter((r) => r.grades.length > 0);
+  const ungraded = rows.filter((r) => r.grades.length === 0);
 
   const averages = rows.map((r) => r.average).filter((a): a is number => a !== null);
   const overall = averages.length ? averages.reduce((s, a) => s + a, 0) / averages.length : null;
   const vmmCount = grades.filter((g) => g.source === 'vmm').length;
+
+  /** One subject line – used by both groups below. */
+  const renderRow = ({ subject, grades: list, average, vmm: link }: SubjectGrades) => {
+    const open = openSubjectId === subject.id;
+    return (
+      <li key={subject.id} className="py-3">
+        <div className="flex items-center gap-3">
+          <span className="h-10 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: subject.colorHex }} />
+          <div className="min-w-0 flex-1">
+            <p className="flex items-baseline gap-2 truncate text-[15px] font-bold text-ink">
+              {subject.name}
+              {link && <span className="text-[11px] font-normal text-ink-3">VMM</span>}
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {list.slice(0, 12).map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => {
+                    if (g.source === 'vmm') {
+                      setOpenSubjectId(open ? null : subject.id);
+                      return;
+                    }
+                    if (window.confirm(`Note ${formatGrade(g.value, g.value % 1 ? 1 : 0)} (${GRADE_KIND_LABELS[g.kind]}) löschen?`)) onDelete(g.id);
+                  }}
+                  title={`${GRADE_KIND_LABELS[g.kind]}${g.date ? ` · ${format(new Date(g.date), 'd. MMM', { locale: de })}` : ''}${
+                    g.title ? ` · ${g.title}` : ''
+                  } – ${g.source === 'vmm' ? 'aus View My Marks' : 'tippen zum Löschen'}`}
+                  className={`flex h-7 min-w-[28px] items-center justify-center rounded-md px-1 font-mono text-[13px] font-semibold ${
+                    g.kind === 'schularbeit' ? 'border-2 border-ink/50' : 'border border-line/15'
+                  } ${g.source === 'vmm' ? 'bg-inset' : ''} ${gradeColor(g.value)}`}
+                >
+                  {formatGrade(g.value, g.value % 1 ? 1 : 0)}
+                </button>
+              ))}
+              {list.length === 0 && <span className="text-[13px] text-ink-3">Noch keine Note</span>}
+            </div>
+            {average !== null && average > 4.49 && <p className="mt-1 text-[12px] font-bold text-pen">Achtung: „Nicht genügend“ droht</p>}
+          </div>
+          {average !== null && (
+            <button
+              type="button"
+              onClick={() => setOpenSubjectId(open ? null : subject.id)}
+              className="flex-shrink-0 text-right"
+              aria-expanded={open}
+              aria-label={`Noten in ${subject.name} anzeigen`}
+            >
+              <span className={`block font-display text-[30px] font-bold leading-none tabular ${gradeColor(average)}`}>{formatGrade(average, 1)}</span>
+              <span className="text-[11px] text-ink-3">{GRADE_NAMES[Math.min(5, Math.max(1, Math.round(average)))]}</span>
+            </button>
+          )}
+        </div>
+
+        {open && list.length > 0 && (
+          <ul className="ml-4 mt-2 space-y-1 rounded-[10px] bg-inset p-3 text-[13px]">
+            {list.map((g) => (
+              <li key={`detail-${g.id}`} className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-ink-2">
+                  {g.title ?? GRADE_KIND_LABELS[g.kind]}
+                  {g.date && ` · ${format(new Date(g.date), 'd. MMM yyyy', { locale: de })}`}
+                  {g.weight !== 1 && ` · ×${g.weight}`}
+                  {g.source === 'vmm' && ' · VMM'}
+                </span>
+                <span className={`tabular font-bold ${gradeColor(g.value)}`}>{formatGrade(g.value, g.value % 1 ? 1 : 0)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </li>
+    );
+  };
 
   return (
     <section className="card" aria-label="Noten">
@@ -126,9 +201,9 @@ export const GradesCard: React.FC<GradesCardProps> = ({
           <p className="mt-1 text-[13px] text-ink-3">
             {overall === null
               ? `${rows.length} ${rows.length === 1 ? 'Fach' : 'Fächer'} · noch keine Noten`
-              : `Gesamtschnitt ${formatGrade(overall, 2)} · ${grades.length} ${grades.length === 1 ? 'Note' : 'Noten'} in ${rows.length} ${
-                  rows.length === 1 ? 'Fach' : 'Fächern'
-                }`}
+              : `Gesamtschnitt ${formatGrade(overall, 2)} · ${grades.length} ${grades.length === 1 ? 'Note' : 'Noten'} in ${graded.length} von ${
+                  rows.length
+                } ${rows.length === 1 ? 'Fach' : 'Fächern'}`}
             {vmmCount > 0 && ` · ${vmmCount} aus VMM`}
           </p>
         </div>
@@ -160,77 +235,40 @@ export const GradesCard: React.FC<GradesCardProps> = ({
             Sobald der Stundenplan da ist, steht hier jedes Fach. Trag Noten ein oder verbinde View My Marks – der Schnitt pro Fach wird automatisch berechnet.
           </p>
         ) : (
-          <ul className="divide-y divide-line/10">
-            {rows.map(({ subject, grades: list, average, vmm: link }) => {
-              const open = openSubjectId === subject.id;
-              return (
-                <li key={subject.id} className="py-3">
-                  <div className="flex items-center gap-3">
-                    <span className="h-10 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: subject.colorHex }} />
-                    <div className="min-w-0 flex-1">
-                      <p className="flex items-baseline gap-2 truncate text-[15px] font-bold text-ink">
-                        {subject.name}
-                        {link && <span className="text-[11px] font-normal text-ink-3">VMM</span>}
-                      </p>
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {list.slice(0, 12).map((g) => (
-                          <button
-                            key={g.id}
-                            type="button"
-                            onClick={() => {
-                              if (g.source === 'vmm') {
-                                setOpenSubjectId(open ? null : subject.id);
-                                return;
-                              }
-                              if (window.confirm(`Note ${formatGrade(g.value, g.value % 1 ? 1 : 0)} (${GRADE_KIND_LABELS[g.kind]}) löschen?`)) onDelete(g.id);
-                            }}
-                            title={`${GRADE_KIND_LABELS[g.kind]}${g.date ? ` · ${format(new Date(g.date), 'd. MMM', { locale: de })}` : ''}${
-                              g.title ? ` · ${g.title}` : ''
-                            } – ${g.source === 'vmm' ? 'aus View My Marks' : 'tippen zum Löschen'}`}
-                            className={`flex h-7 min-w-[28px] items-center justify-center rounded-md px-1 font-mono text-[13px] font-semibold ${
-                              g.kind === 'schularbeit' ? 'border-2 border-ink/50' : 'border border-line/15'
-                            } ${g.source === 'vmm' ? 'bg-inset' : ''} ${gradeColor(g.value)}`}
-                          >
-                            {formatGrade(g.value, g.value % 1 ? 1 : 0)}
-                          </button>
-                        ))}
-                        {list.length === 0 && <span className="text-[13px] text-ink-3">Noch keine Note</span>}
-                      </div>
-                      {average !== null && average > 4.49 && <p className="mt-1 text-[12px] font-bold text-pen">Achtung: „Nicht genügend“ droht</p>}
-                    </div>
-                    {average !== null && (
-                      <button
-                        type="button"
-                        onClick={() => setOpenSubjectId(open ? null : subject.id)}
-                        className="flex-shrink-0 text-right"
-                        aria-expanded={open}
-                        aria-label={`Noten in ${subject.name} anzeigen`}
-                      >
-                        <span className={`block font-display text-[30px] font-bold leading-none tabular ${gradeColor(average)}`}>{formatGrade(average, 1)}</span>
-                        <span className="text-[11px] text-ink-3">{GRADE_NAMES[Math.min(5, Math.max(1, Math.round(average)))]}</span>
-                      </button>
-                    )}
-                  </div>
+          <>
+            {graded.length > 0 && (
+              <>
+                <p className="eyebrow pb-1 pt-1">Mit Noten · {graded.length}</p>
+                <ul className="divide-y divide-line/10">{graded.map(renderRow)}</ul>
+              </>
+            )}
 
-                  {open && list.length > 0 && (
-                    <ul className="ml-4 mt-2 space-y-1 rounded-[10px] bg-inset p-3 text-[13px]">
-                      {list.map((g) => (
-                        <li key={`detail-${g.id}`} className="flex items-baseline justify-between gap-3">
-                          <span className="min-w-0 truncate text-ink-2">
-                            {g.title ?? GRADE_KIND_LABELS[g.kind]}
-                            {g.date && ` · ${format(new Date(g.date), 'd. MMM yyyy', { locale: de })}`}
-                            {g.weight !== 1 && ` · ×${g.weight}`}
-                            {g.source === 'vmm' && ' · VMM'}
-                          </span>
-                          <span className={`tabular font-bold ${gradeColor(g.value)}`}>{formatGrade(g.value, g.value % 1 ? 1 : 0)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+            {ungraded.length > 0 && (
+              <div className={graded.length > 0 ? 'mt-3 border-t border-line/10 pt-2' : ''}>
+                <button
+                  type="button"
+                  onClick={() => setShowEmpty((v) => !v)}
+                  aria-expanded={showEmpty}
+                  className="flex w-full items-center justify-between gap-2 py-1 text-left"
+                >
+                  <span className="eyebrow">Noch keine Note · {ungraded.length}</span>
+                  <ChevronDown className={`h-4 w-4 flex-shrink-0 text-ink-3 transition-transform ${showEmpty ? 'rotate-180' : ''}`} />
+                </button>
+                {showEmpty ? (
+                  <ul className="divide-y divide-line/10">{ungraded.map(renderRow)}</ul>
+                ) : (
+                  <div className="flex flex-wrap gap-1 pb-2 pt-1">
+                    {ungraded.map(({ subject }) => (
+                      <span key={subject.id} className="chip gap-1.5">
+                        <span className="h-2 w-2 flex-shrink-0 rounded-[2px]" style={{ backgroundColor: subject.colorHex }} />
+                        {subject.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
         {orphans.length > 0 && (
           <div className="mt-2 rounded-[10px] border border-warn/25 bg-warn/5 p-3">
