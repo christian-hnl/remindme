@@ -838,7 +838,6 @@ function Dashboard({ initialData }: DashboardContainerProps) {
       onOpenUntisModal={() => setIsUntisModalOpen(true)}
       onCreateTask={openNewTask}
       onEditTask={openEditTask}
-      onScheduleChanged={refreshSummary}
     />
   );
 

@@ -6,12 +6,10 @@ import { de } from 'date-fns/locale';
 import type { ScheduleBlock, Task, WebUntisConfig } from '@/types';
 import {
   AlertTriangle,
-  Check,
   ChevronLeft,
   ChevronRight,
   Filter,
   GraduationCap,
-  HelpCircle,
   Maximize2,
   Minimize2,
   Plus,
@@ -20,7 +18,6 @@ import {
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { CheckButton } from '@/components/ui/CheckButton';
-import { useToast } from '@/components/ui/Toast';
 import { minutesToTime, timeToMinutes, toDateInput } from '@/lib/format';
 import { api, errorMessage } from '@/lib/client';
 import { groupOverlapping } from '@/lib/lanes';
@@ -34,8 +31,6 @@ interface TimetableScheduleProps {
   onOpenUntisModal: () => void;
   onCreateTask: (subjectId?: string | null) => void;
   onEditTask: (task: Task) => void;
-  /** Reloads the dashboard after the user resolved a parallel slot. */
-  onScheduleChanged?: () => void | Promise<void>;
 }
 
 const DAYS = [
@@ -53,11 +48,8 @@ interface Period {
   endMin: number;
 }
 
-type ParallelLesson = NonNullable<WebUntisConfig['parallelSlots']>[number]['lessons'][number];
-
 const blockCode = (b: ScheduleBlock) => (b.subjectCode || b.title.slice(0, 3)).toUpperCase();
 const blockName = (b: ScheduleBlock) => b.subject?.name ?? b.title.split('(')[0].trim();
-const slotId = (day: number, startTime: string) => `${day}|${startTime}`;
 
 /** Up to three parallel lessons side by side; more wrap into further rows. */
 const parallelGrid = (count: number) => (count >= 3 ? 'grid-cols-3' : count === 2 ? 'grid-cols-2' : 'grid-cols-1');
@@ -110,9 +102,7 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   onOpenUntisModal,
   onCreateTask,
   onEditTask,
-  onScheduleChanged,
 }) => {
-  const toast = useToast();
   const clock = useClock();
   const todaysWeekday = clock && clock.weekday >= 1 && clock.weekday <= 5 ? clock.weekday : null;
   const minutesNow = clock?.minutes ?? -1;
@@ -123,7 +113,6 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   const [filterOpen, setFilterOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [inspectId, setInspectId] = useState<string | null>(null);
-  const [savingSlot, setSavingSlot] = useState<string | null>(null);
   // 0 = the synced week in the database; other offsets are fetched live from WebUntis.
   const [weekOffset, setWeekOffset] = useState(0);
   const [weekCache, setWeekCache] = useState<Record<number, ScheduleBlock[]>>({});
@@ -184,58 +173,6 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
     return periods.find((p) => start >= p.startMin && start <= p.lastStartMin)?.id ?? 0;
   };
 
-  /**
-   * WebUntis hands out the whole class timetable, so some slots still hold two lessons and
-   * only the student knows which one they attend. Those are settled right here in the plan
-   * instead of sending anyone into the settings.
-   */
-  const openChoices = useMemo(() => {
-    const map = new Map<string, ParallelLesson[]>();
-    for (const slot of untisConfig?.parallelSlots ?? []) {
-      const open = slot.lessons.filter((l) => !l.hidden);
-      if (open.length > 1) map.set(slotId(slot.day, slot.startTime), open);
-    }
-    return map;
-  }, [untisConfig]);
-
-  /** Lessons of a slot that were ruled out by hand – so a wrong tap can be taken back. */
-  const droppedChoices = useMemo(() => {
-    const map = new Map<string, ParallelLesson[]>();
-    for (const slot of untisConfig?.parallelSlots ?? []) {
-      const dropped = slot.lessons.filter((l) => l.hidden && !l.rotatedAway);
-      if (dropped.length > 0) map.set(slotId(slot.day, slot.startTime), dropped);
-    }
-    return map;
-  }, [untisConfig]);
-
-  const matchesBlock = (lesson: ParallelLesson, block: ScheduleBlock) =>
-    lesson.subjectCode === (block.subjectCode ?? '') && (lesson.studentGroup ?? null) === (block.studentGroup ?? null);
-
-  const saveHidden = async (keys: string[], message: string, slot: string) => {
-    setSavingSlot(slot);
-    try {
-      await api('/api/v1/webuntis/config', { body: { hiddenLessons: keys } });
-      toast(message);
-      await onScheduleChanged?.();
-    } catch (error) {
-      toast(errorMessage(error), 'error');
-    } finally {
-      setSavingSlot(null);
-    }
-  };
-
-  /** Keeps one lesson of a parallel slot and hides the others. */
-  const pickLesson = (slot: string, keepKey: string) => {
-    const others = (openChoices.get(slot) ?? []).filter((l) => l.key !== keepKey).map((l) => l.key);
-    return saveHidden([...(untisConfig?.hiddenLessons ?? []), ...others], 'Passt – der Plan zeigt jetzt nur deine Stunde.', slot);
-  };
-
-  /** Puts the lessons of a slot back after a wrong tap. */
-  const undoSlot = (slot: string) => {
-    const dropped = new Set((droppedChoices.get(slot) ?? []).map((l) => l.key));
-    return saveHidden((untisConfig?.hiddenLessons ?? []).filter((k) => !dropped.has(k)), 'Die Stunden sind wieder da.', slot);
-  };
-
   const subjects = useMemo(() => {
     const map = new Map<string, { code: string; name: string; colorHex: string; count: number }>();
     for (const b of displaySchedule) {
@@ -263,7 +200,6 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   const nextBlock = activeBlock || upcomingBlock ? undefined : todayLessons.find((b) => timeToMinutes(b.startTime) > minutesNow);
   const spotlight = activeBlock ?? upcomingBlock ?? nextBlock;
   const inspectBlock = displaySchedule.find((b) => b.id === inspectId) ?? null;
-  const openCount = openChoices.size;
 
   const weekMonday = mondayOf(weekOffset);
   const weekFriday = new Date(weekMonday);
@@ -294,7 +230,8 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
       )
     : 0;
 
-  const renderGridCard = (block: ScheduleBlock, compact: boolean, undecided: boolean) => {
+  /** One cell of the week grid – subject, teacher, room, the way WebUntis prints it. */
+  const renderGridCard = (block: ScheduleBlock, compact: boolean) => {
     const pending = block.tasks?.filter((t) => t.status !== 'done').length ?? 0;
     return (
       <button
@@ -303,40 +240,34 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
         onClick={() => setInspectId(block.id)}
         title={`${blockName(block)} · ${block.startTime}–${block.endTime}${block.room ? ` · ${block.room}` : ''}${
           block.teacher ? ` · ${block.teacher}` : ''
-        }${block.isExam ? ' · Prüfung' : ''}${undecided ? ' · noch offen: welche Stunde hast du?' : ''}`}
-        className={`block w-full min-w-0 rounded-[8px] border-l-[3px] text-left transition-[filter] hover:brightness-95 ${
-          compact ? 'px-1.5 py-1.5' : 'p-2'
-        } ${block.isCancelled ? 'hatch' : ''} ${isNow(block) ? 'ring-2 ring-marker ring-offset-1 ring-offset-sheet' : ''} ${
-          block.isExam ? 'border-pen/70' : ''
-        } ${undecided ? 'outline-dashed outline-1 outline-offset-[-1px] outline-warn/60' : ''}`}
+        }${block.isExam ? ' · Prüfung' : ''}`}
+        className={`flex w-full min-w-0 flex-col justify-center rounded-[7px] border-l-[3px] px-1.5 py-1 text-left leading-tight transition-[filter] hover:brightness-95 ${
+          block.isCancelled ? 'hatch opacity-70' : ''
+        } ${isNow(block) ? 'ring-2 ring-marker ring-offset-1 ring-offset-sheet' : ''} ${block.isExam ? 'border-pen/70' : ''}`}
         style={{
           borderLeftColor: block.isExam ? undefined : block.colorHex,
           backgroundColor: block.isExam ? 'rgb(var(--pen) / 0.12)' : `${block.colorHex}1f`,
         }}
       >
-        <span className="flex items-baseline justify-between gap-1">
+        <span className="flex items-center justify-between gap-1">
           <span
-            className={`flex min-w-0 items-center gap-1 truncate font-display font-bold leading-none text-ink ${compact ? 'text-[14px]' : 'text-[16px]'} ${
+            className={`flex min-w-0 items-center gap-1 truncate font-display font-bold text-ink ${compact ? 'text-[13px]' : 'text-[15px]'} ${
               block.isCancelled ? 'line-through decoration-pen decoration-2' : ''
             }`}
           >
             {block.isExam && <GraduationCap className="h-3.5 w-3.5 flex-shrink-0 text-pen" aria-label="Prüfung" />}
             {blockCode(block)}
           </span>
-          {undecided ? (
-            <HelpCircle className="h-3.5 w-3.5 flex-shrink-0 text-warn" aria-label="Noch offen" />
-          ) : (
-            pending > 0 && (
-              <span className="rounded bg-accent px-1 font-mono text-[10px] font-semibold leading-4 text-on-accent" title="Offene Hausübungen">
-                {compact ? pending : `${pending} HÜ`}
-              </span>
-            )
+          {pending > 0 && (
+            <span className="rounded bg-accent px-1 font-mono text-[10px] font-semibold leading-4 text-on-accent" title="Offene Hausübungen">
+              {pending}
+            </span>
           )}
         </span>
-        {!compact && <span className="mt-1 line-clamp-2 block text-[12px] font-bold leading-tight text-ink-2">{blockName(block)}</span>}
-        {block.room && <span className="mt-1 block truncate font-mono text-[11px] text-ink-3">{block.room}</span>}
+        {block.teacher && <span className="mt-0.5 block truncate font-mono text-[10.5px] text-ink-3">{block.teacher}</span>}
+        {block.room && <span className="block truncate font-mono text-[10.5px] text-ink-2">{block.room}</span>}
         {block.substitutionNote && (
-          <span className={`mt-1 block truncate text-[11px] font-bold ${block.isCancelled ? 'text-pen' : 'text-warn'}`}>
+          <span className={`mt-0.5 block truncate text-[10.5px] font-bold ${block.isCancelled ? 'text-pen' : 'text-warn'}`}>
             {compact ? (block.isCancelled ? 'Entfällt' : 'Änderung') : block.substitutionNote}
           </span>
         )}
@@ -408,43 +339,6 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
             </button>
           </>
         )}
-      </div>
-    );
-  };
-
-  /** One tap in the plan settles a parallel slot – no detour through the settings. */
-  const renderChooser = (slot: string, blocks: ScheduleBlock[]) => {
-    const choices = openChoices.get(slot) ?? [];
-    const busy = savingSlot === slot;
-    return (
-      <div className="rounded-[10px] border border-dashed border-warn/50 bg-warn/5 p-3">
-        <p className="flex items-center gap-1.5 text-[13px] font-bold text-ink">
-          <HelpCircle className="h-4 w-4 flex-shrink-0 text-warn" /> Welche Stunde hast du?
-        </p>
-        <p className="mt-0.5 text-[12px] text-ink-3">WebUntis liefert hier die ganze Klasse. Ein Tipp und der Plan gehört dir.</p>
-        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
-          {blocks.map((block) => {
-            const choice = choices.find((c) => matchesBlock(c, block));
-            return (
-              <button
-                key={block.id}
-                type="button"
-                disabled={busy || !choice}
-                onClick={() => choice && pickLesson(slot, choice.key)}
-                className="flex min-w-0 items-center gap-2 rounded-[9px] border border-line/15 bg-sheet p-2.5 text-left transition-colors hover:border-ink/40 disabled:opacity-50"
-              >
-                <span className="h-8 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: block.colorHex }} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-bold text-ink">{blockName(block)}</span>
-                  <span className="block truncate font-mono text-[12px] text-ink-3">
-                    {[block.teacher, block.room].filter(Boolean).join(' · ') || blockCode(block)}
-                  </span>
-                </span>
-                <Check className="h-4 w-4 flex-shrink-0 text-ink-3" />
-              </button>
-            );
-          })}
-        </div>
       </div>
     );
   };
@@ -627,63 +521,53 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
             </button>
           )}
 
-          {openCount > 0 && weekOffset === 0 && (
-            <p className="mx-4 mb-3 flex items-start gap-2 rounded-[10px] bg-warn/10 p-2.5 text-[13px] text-warn sm:mx-5">
-              <HelpCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              <span>
-                {openCount === 1 ? 'Eine Stunde ist noch offen' : `${openCount} Stunden sind noch offen`} – tipp sie an und sag, welche du hast.
-              </span>
-            </p>
-          )}
-
           {viewMode === 'week' ? (
             <div className="overflow-x-auto px-4 pb-4 sm:px-5 sm:pb-5">
-              <div className="min-w-[680px]">
-                <div className="grid grid-cols-[58px_repeat(5,minmax(0,1fr))] gap-1.5 pb-1.5">
+              <div className="min-w-[660px]">
+                <div className="grid grid-cols-[46px_repeat(5,minmax(0,1fr))] gap-1 pb-1">
                   <span />
-                  {DAYS.map((d) => {
-                    const count = filtered.filter((b) => b.dayOfWeek === d.num && !b.isCancelled).length;
-                    return (
-                      <button
-                        key={d.num}
-                        type="button"
-                        onClick={() => {
-                          setSelectedDay(d.num);
-                          setViewMode('day');
-                        }}
-                        className="rounded-md px-2 py-1 text-left hover:bg-inset"
-                        title={`${d.name} als Tagesansicht`}
-                      >
-                        <span className={`font-display text-[17px] font-semibold ${d.num === schoolDay ? 'marker text-ink' : 'text-ink-2'}`}>
-                          {d.name}
-                        </span>
-                        <span className="block font-mono text-[11px] text-ink-3">
-                          {format(dateOf(d.num), 'd.M.')} · {count} Std.
-                        </span>
-                      </button>
-                    );
-                  })}
+                  {DAYS.map((d) => (
+                    <button
+                      key={d.num}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDay(d.num);
+                        setViewMode('day');
+                      }}
+                      className={`rounded-[8px] px-2 py-1.5 text-center transition-colors hover:bg-inset ${
+                        d.num === schoolDay ? 'bg-marker/15' : ''
+                      }`}
+                      title={`${d.name} als Tagesansicht`}
+                    >
+                      <span className={`block font-display text-[14px] font-bold leading-none ${d.num === schoolDay ? 'text-ink' : 'text-ink-2'}`}>
+                        {d.name}
+                      </span>
+                      <span className="mt-0.5 block font-mono text-[11px] text-ink-3 tabular">{format(dateOf(d.num), 'd.M.')}</span>
+                    </button>
+                  ))}
                 </div>
 
                 {periods.map((period) => {
                   const running = schoolDay !== null && minutesNow >= period.startMin && minutesNow < period.endMin;
                   return (
-                    <div key={period.id} className="grid grid-cols-[58px_repeat(5,minmax(0,1fr))] gap-1.5 border-t border-line/10 py-1.5">
-                      <div className={`pt-1 font-mono text-[12px] leading-tight tabular ${running ? 'font-bold text-ink' : 'text-ink-2'}`}>
-                        {minutesToTime(period.startMin)}
-                        <span className="block text-[11px] text-ink-3">{minutesToTime(period.endMin)}</span>
+                    <div key={period.id} className="grid grid-cols-[46px_repeat(5,minmax(0,1fr))] gap-1 pb-1">
+                      <div className="flex flex-col items-end justify-center pr-1 text-right">
+                        <span className={`font-display text-[15px] font-bold leading-none ${running ? 'text-ink' : 'text-ink-3'}`}>{period.id}</span>
+                        <span className="mt-1 font-mono text-[10px] leading-[1.35] text-ink-3 tabular">
+                          {minutesToTime(period.startMin)}
+                          <span className="block">{minutesToTime(period.endMin)}</span>
+                        </span>
                       </div>
                       {DAYS.map((day) => {
                         const lessons = filtered.filter((b) => b.dayOfWeek === day.num && periodOf(b) === period.id);
-                        const undecided = lessons.length > 1 && openChoices.has(slotId(day.num, lessons[0].startTime));
                         return (
                           <div
                             key={day.num}
-                            className={`grid min-h-[68px] content-start gap-1 rounded-[9px] p-0.5 ${parallelGrid(lessons.length)} ${
+                            className={`grid min-h-[72px] gap-1 rounded-[8px] ${parallelGrid(lessons.length)} ${
                               day.num === schoolDay ? 'bg-marker/[0.07]' : ''
                             }`}
                           >
-                            {lessons.map((b) => renderGridCard(b, lessons.length > 1, undecided))}
+                            {lessons.map((b) => renderGridCard(b, lessons.length > 1))}
                           </div>
                         );
                       })}
@@ -719,8 +603,6 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
                     const passed = selectedDay === schoolDay && minutesNow >= timeToMinutes(end);
                     const previous = dayGroups[index - 1];
                     const gap = previous ? timeToMinutes(group[0].startTime) - Math.max(...previous.map((b) => timeToMinutes(b.endTime))) : 0;
-                    const slot = slotId(selectedDay, group[0].startTime);
-                    const undecided = group.length > 1 && openChoices.has(slot);
                     return (
                       <React.Fragment key={group[0].id}>
                         {gap >= 15 && (
@@ -736,17 +618,13 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
                             {group[0].startTime}
                             <span className="block text-[11px] text-ink-3">{end}</span>
                           </div>
-                          {undecided ? (
-                            <div className="min-w-0 flex-1">{renderChooser(slot, group)}</div>
-                          ) : (
-                            <div
-                              className={`grid min-w-0 flex-1 gap-2 ${
-                                group.length >= 3 ? 'grid-cols-2 sm:grid-cols-3' : group.length === 2 ? 'grid-cols-2' : ''
-                              }`}
-                            >
-                              {group.map((block) => renderDayCard(block, group.length > 1))}
-                            </div>
-                          )}
+                          <div
+                            className={`grid min-w-0 flex-1 gap-2 ${
+                              group.length >= 3 ? 'grid-cols-2 sm:grid-cols-3' : group.length === 2 ? 'grid-cols-2' : ''
+                            }`}
+                          >
+                            {group.map((block) => renderDayCard(block, group.length > 1))}
+                          </div>
                         </li>
                       </React.Fragment>
                     );
@@ -767,12 +645,6 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
       >
         {inspectBlock && (
           <div className="space-y-5">
-            {openChoices.has(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) &&
-              renderChooser(
-                slotId(inspectBlock.dayOfWeek, inspectBlock.startTime),
-                displaySchedule.filter((b) => b.dayOfWeek === inspectBlock.dayOfWeek && b.startTime === inspectBlock.startTime)
-              )}
-
             <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line/10 bg-line/10">
               <div className="bg-sheet p-3">
                 <dt className="eyebrow">Raum</dt>
@@ -806,20 +678,6 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
               </p>
             )}
 
-            {!openChoices.has(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) &&
-              droppedChoices.has(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) && (
-                <button
-                  type="button"
-                  disabled={savingSlot === slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)}
-                  onClick={() => undoSlot(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime))}
-                  className="btn-ghost h-9 w-full justify-start px-2 text-[13px]"
-                >
-                  Doch falsch? {(droppedChoices.get(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) ?? [])
-                    .map((l) => l.subjectName)
-                    .join(', ')}{' '}
-                  wieder anzeigen
-                </button>
-              )}
 
             <div>
               <div className="mb-1 flex items-center justify-between">
