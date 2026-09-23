@@ -138,32 +138,83 @@ const toNumber = (value: unknown) => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** VMM's field names aren't documented – map defensively and keep the raw row. */
+/** VMM nests objects where a name is expected ({abbreviation, name}, {first_name, last_name}). */
+const asText = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(asText).filter(Boolean).join(', ') || null;
+  if (typeof value === 'object') {
+    const row = value as Record<string, unknown>;
+    const person = [asText(row['first_name']), asText(row['last_name'])].filter(Boolean).join(' ');
+    if (person) return person;
+    return asText(row['name'] ?? row['long_name'] ?? row['title'] ?? row['label'] ?? row['abbreviation'] ?? row['short_name']);
+  }
+  return null;
+};
+
+/** "POS · POS · Schreiber" helps nobody – drop the repeats. */
+const joinParts = (parts: (string | null)[]) => [...new Set(parts.filter((p): p is string => !!p))].join(' · ');
+
+/** The short form of a subject, e.g. "POS" – handy for matching against Untis codes. */
+const asCode = (value: unknown): string | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? asText((value as Record<string, unknown>)['abbreviation'] ?? (value as Record<string, unknown>)['short_name'])
+    : null;
+
+/**
+ * One assessment. VMM calls the grade `overall_mark` and the date `timestamp`;
+ * `display_mark` is what the teacher lets you see, which can be "-" while a grade exists.
+ */
 function normalizeMark(row: Record<string, any>): VmmMark {
+  const value = pick(row, ['overall_mark', 'exact_overall_mark', 'mark', 'grade', 'value', 'points', 'score']);
   return {
-    id: pick(row, ['id', 'pk', 'uuid']) ?? undefined,
-    title: String(pick(row, ['name', 'title', 'description', 'column_name', 'competence']) ?? 'Note'),
-    value: pick(row, ['mark', 'grade', 'value', 'points', 'score']),
+    id: (pick(row, ['id', 'pk', 'uuid']) as string | number) ?? undefined,
+    title: asText(pick(row, ['public_comment', 'name', 'title', 'description', 'column_name', 'competence'])) ?? 'Note',
+    value: typeof value === 'number' || typeof value === 'string' ? value : null,
     weight: toNumber(pick(row, ['weight', 'weighting', 'factor'])),
-    date: (pick(row, ['date', 'created_at', 'created', 'timestamp', 'day']) as string) ?? null,
-    category: (pick(row, ['category', 'category_name', 'type', 'kind']) as string) ?? null,
+    date: asText(pick(row, ['timestamp', 'date', 'created_at', 'created', 'day'])),
+    category: asText(pick(row, ['law_category', 'category', 'category_name', 'type', 'kind'])),
     raw: row,
   };
 }
 
-function normalizeGroup(row: Record<string, any>): VmmGroupData {
+/**
+ * The marks endpoint answers with the group around its marks, so the real assessments
+ * sit one level down. Pull them out, and take subject and teacher along while we're there.
+ */
+export function collectMarks(payload: unknown): { marks: VmmMark[]; subject: string | null; code: string | null; teacher: string | null } {
+  const marks: VmmMark[] = [];
+  let subject: string | null = null;
+  let code: string | null = null;
+  let teacher: string | null = null;
+
+  for (const row of asArray(payload)) {
+    if (!row || typeof row !== 'object') continue;
+    subject ??= asText(row.subject);
+    code ??= asCode(row.subject);
+    teacher ??= asText(row.teachers ?? row.teacher);
+    if (Array.isArray(row.marks)) marks.push(...row.marks.map(normalizeMark));
+    // A flat list of assessments – no wrapper to unpack.
+    else if (pick(row, ['overall_mark', 'exact_overall_mark', 'mark', 'grade', 'value']) !== null) marks.push(normalizeMark(row));
+  }
+
+  return { marks, subject, code, teacher };
+}
+
+export function normalizeGroup(row: Record<string, any>): VmmGroupData {
+  const subject = asText(row?.subject ?? row?.subject_name ?? row?.subject_long);
+  const code = asCode(row?.subject);
+  const teacher = asText(row?.teachers ?? row?.teacher);
+  const label = asText(pick(row, ['name', 'title', 'group_name']));
+
   return {
-    externalId: String(pick(row, ['id', 'pk', 'uuid']) ?? pick(row, ['name']) ?? ''),
-    name: String(pick(row, ['name', 'title', 'group_name']) ?? 'Gruppe'),
-    subjectName: (pick(row, ['subject', 'subject_name', 'subject_long']) as string) ?? null,
-    teacher: (() => {
-      const teachers = row?.teachers ?? row?.teacher;
-      if (Array.isArray(teachers)) {
-        return teachers.map((t: any) => (typeof t === 'string' ? t : [t?.first_name, t?.last_name].filter(Boolean).join(' '))).filter(Boolean).join(', ') || null;
-      }
-      return typeof teachers === 'string' ? teachers : null;
-    })(),
-    average: toNumber(pick(row, ['average', 'avg', 'mark_average', 'grade'])),
+    externalId: String(pick(row, ['id', 'pk', 'uuid']) ?? label ?? subject ?? ''),
+    // The abbreviation stays in the name, because that's what links a group to a subject.
+    name: label ?? (joinParts([code, subject, teacher]) || 'Gruppe'),
+    subjectName: subject ?? code,
+    teacher,
+    average: toNumber(pick(row, ['average', 'avg', 'mark_average'])),
     marks: [],
   };
 }
@@ -177,25 +228,30 @@ export async function syncVmm(userId: string) {
     const groups = asArray(await authorized(config, '/api/students/groups/')).map(normalizeGroup).filter((g) => g.externalId);
 
     for (const group of groups) {
-      const marks = await authorized(config, `/api/students/groups/${encodeURIComponent(group.externalId)}/marks/`).catch(() => null);
-      group.marks = asArray(marks).map(normalizeMark);
+      const detail = collectMarks(await authorized(config, `/api/students/groups/${encodeURIComponent(group.externalId)}/marks/`).catch(() => null));
+      group.marks = detail.marks;
+      // The group list is thin; the marks response is where subject and teacher actually are.
+      group.subjectName ??= detail.subject ?? detail.code;
+      group.teacher ??= detail.teacher;
+      if (!asText(group.name) || group.name === 'Gruppe') {
+        group.name = joinParts([detail.code, detail.subject, detail.teacher]) || group.name;
+      }
       if (group.average === null) {
         const numbers = group.marks.map((m) => toNumber(m.value)).filter((n): n is number => n !== null && n >= 1 && n <= 5);
         group.average = numbers.length ? Math.round((numbers.reduce((s, n) => s + n, 0) / numbers.length) * 100) / 100 : null;
       }
 
+      const stored = {
+        name: asText(group.name) ?? 'Gruppe',
+        subjectName: asText(group.subjectName),
+        teacher: asText(group.teacher),
+        average: group.average,
+        marks: JSON.stringify(group.marks),
+      };
       await db.vmmGroup.upsert({
         where: { configId_externalId: { configId: config.id, externalId: group.externalId } },
-        update: { name: group.name, subjectName: group.subjectName, teacher: group.teacher, average: group.average, marks: JSON.stringify(group.marks) },
-        create: {
-          configId: config.id,
-          externalId: group.externalId,
-          name: group.name,
-          subjectName: group.subjectName,
-          teacher: group.teacher,
-          average: group.average,
-          marks: JSON.stringify(group.marks),
-        },
+        update: stored,
+        create: { configId: config.id, externalId: group.externalId, ...stored },
       });
     }
 

@@ -1,24 +1,31 @@
 // Shared by server and client – keep free of server-only imports.
 import type { Subject, VmmGroup, VmmMark } from '@/types';
 
-const normalize = (value: string) =>
+const fold = (value: string) =>
   value
     .toLowerCase()
-    .replace(/[äöüß]/g, (c) => ({ ä: 'ae', ö: 'oe', ü: 'ue', ß: 'ss' })[c] ?? c)
-    .replace(/[^a-z0-9]/g, '');
+    .replace(/[äöüß]/g, (c) => ({ ä: 'ae', ö: 'oe', ü: 'ue', ß: 'ss' })[c] ?? c);
+
+const normalize = (value: string) => fold(value).replace(/[^a-z0-9]/g, '');
+
+/** Words of a group name – "POS · Christoph Schreiber" → ["pos", "christoph", "schreiber"]. */
+const words = (value: string) => fold(value).split(/[^a-z0-9]+/).filter(Boolean);
 
 /**
- * VMM group names look like "4CHIF - DBI - Huber", Untis knows "DBI", and the subject
- * carries both. Matching on the code first and the name second covers all three.
+ * VMM group names read like "POS · Christoph Schreiber", Untis knows "POS", and the subject
+ * carries both. The code has to match a whole word – otherwise "CH" finds "Christoph".
  */
 export function matchSubject(group: VmmGroup, subjects: Subject[]): Subject | null {
-  const haystack = normalize([group.name, group.subjectName ?? ''].join(' '));
+  const text = [group.name, group.subjectName ?? ''].join(' ');
+  const tokens = new Set(words(text));
+
   const codeMatch = subjects
-    .filter((s) => s.untisCode && haystack.includes(normalize(s.untisCode)))
+    .filter((s) => s.untisCode && tokens.has(normalize(s.untisCode)))
     // The longest code wins, so "DBI" doesn't beat "DBI2".
     .sort((a, b) => (b.untisCode?.length ?? 0) - (a.untisCode?.length ?? 0))[0];
   if (codeMatch) return codeMatch;
 
+  const haystack = normalize(text);
   const nameMatch = subjects.find((s) => {
     const name = normalize(s.name);
     return name.length >= 4 && haystack.includes(name);
