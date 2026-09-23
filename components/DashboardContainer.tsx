@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { de } from 'date-fns/locale';
 import type {
@@ -33,6 +33,9 @@ import { UpcomingCard } from './focus/UpcomingCard';
 import { TaskMatrix } from './tasks/TaskMatrix';
 import { TaskModal } from './tasks/TaskModal';
 import { ExamsCard, type ExamPayload } from './school/ExamsCard';
+import { StudyPlanCard } from './school/StudyPlanCard';
+import { linkVmmGroups, vmmGradesForPlanner } from '@/lib/school/vmm-link';
+import { VmmGradesCard } from './school/VmmGradesCard';
 import { GradesCard, type GradePayload } from './school/GradesCard';
 import { ShoppingList } from './life/ShoppingList';
 import { HabitsCard } from './life/HabitsCard';
@@ -211,6 +214,21 @@ function Dashboard({ initialData }: DashboardContainerProps) {
   const openSettings = useCallback((tab: SettingsTab = 'profile') => {
     setSettingsTab(tab);
     setIsSettingsOpen(true);
+  }, []);
+
+  // VMM marks are the real grades, so the study plan runs on them when they're there.
+  const vmmLinks = useMemo(() => linkVmmGroups(data.vmm?.groups ?? [], data.subjects), [data.vmm, data.subjects]);
+  const plannerGrades = useMemo(() => {
+    const fromVmm = vmmGradesForPlanner(vmmLinks);
+    const covered = new Set(fromVmm.map((g) => g.subjectId));
+    // Manually kept grades still count for subjects VMM doesn't cover.
+    return [...fromVmm, ...data.grades.filter((g) => !g.subjectId || !covered.has(g.subjectId))];
+  }, [vmmLinks, data.grades]);
+
+  /** Brings an exam from the study plan into view in the exams card. */
+  const scrollToExam = useCallback((examId: string) => {
+    const target = document.getElementById(`exam-${examId}`) ?? document.getElementById('exams-card');
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
   const openNewTask = useCallback((subjectId?: string | null) => setTaskModal({ task: null, subjectId: subjectId ?? null }), []);
@@ -970,13 +988,30 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                   />
                 </div>
                 <div className="order-3 min-w-0">
+                  <VmmGradesCard
+                    config={data.vmm}
+                    subjects={data.subjects}
+                    onChanged={(config) => setData((d) => ({ ...d, vmm: config }))}
+                    onOpenSettings={() => openSettings('marks')}
+                  />
+                </div>
+                <div className="order-5 min-w-0">
                   <PomodoroTimer />
                 </div>
                 <div className="order-6 min-w-0">{miniCalendar}</div>
               </div>
               <div className="contents xl:col-span-8 xl:flex xl:flex-col xl:gap-6">
                 <div className="order-1 min-w-0">{taskMatrix}</div>
-                <div className="order-4 min-w-0">{timetable}</div>
+                <div className="order-4 min-w-0">
+                  <StudyPlanCard
+                    exams={data.exams}
+                    grades={plannerGrades}
+                    subjects={data.subjects}
+                    gradeSource={vmmLinks.length > 0 ? 'View My Marks' : null}
+                    onOpenExam={(exam) => scrollToExam(exam.id)}
+                  />
+                </div>
+                <div className="order-6 min-w-0">{timetable}</div>
                 <div className="order-5 min-w-0">
                   <GradesCard
                     grades={data.grades}
@@ -1315,6 +1350,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
         user={data.user}
         subjects={data.subjects}
         untisConfig={data.untisConfig}
+        vmm={data.vmm}
+        onVmmChanged={(config) => setData((d) => ({ ...d, vmm: config }))}
         banking={data.banking}
         onBankingChanged={refreshSummary}
         onSettingsSaved={refreshSummary}

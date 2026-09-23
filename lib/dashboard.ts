@@ -5,6 +5,7 @@ import { filterByGroups, findParallelSlots, lessonKey, parseRotations, parseStri
 import { getIcalToken } from '@/lib/auth';
 import type { DashboardSummary } from '@/types';
 import { loadSkills } from '@/lib/skills-db';
+import { toSafeVmmConfigWithGroups } from '@/lib/vmm';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -43,6 +44,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     birthdays,
     skills,
     bibleBookmarks,
+    vmmConfig,
   ] = await Promise.all([
     db.task.findMany({
       where: { userId, status: { not: 'archived' } },
@@ -110,6 +112,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     db.birthday.findMany({ where: { userId }, orderBy: [{ month: 'asc' }, { day: 'asc' }] }),
     loadSkills(userId),
     db.bibleBookmark.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } }),
+    db.vmmConfig.findUnique({ where: { userId }, include: { groups: { orderBy: { name: 'asc' } } } }),
   ]);
 
   // Accounts with a bank-reported balance use it; imported accounts sum their bookings.
@@ -245,6 +248,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     skills,
     bibleBookmarks,
     untisConfig: untisConfig ? { ...toSafeUntisConfig(untisConfig)!, availableGroups, parallelSlots } : null,
+    vmm: toSafeVmmConfigWithGroups(vmmConfig),
     banking: {
       configured:
         !!(process.env['ENABLE_BANKING_APP_ID'] && process.env['ENABLE_BANKING_PRIVATE_KEY']) ||

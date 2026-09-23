@@ -2,11 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import { CalendarPlus, Download, Plus, Settings, Trash2 } from 'lucide-react';
-import type { DashboardSummary, Subject, WebUntisConfig } from '@/types';
+import type { DashboardSummary, Subject, VmmConfig, WebUntisConfig } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 import { WebUntisConfigForm } from '@/components/webuntis/WebUntisConfigForm';
 import { BankingSettings } from './BankingSettings';
+import { VmmSettings } from './VmmSettings';
 import { api, errorMessage } from '@/lib/client';
 import { parseAmount } from '@/lib/format';
 
@@ -16,6 +17,8 @@ interface SettingsModalProps {
   user: DashboardSummary['user'];
   subjects: Subject[];
   untisConfig: WebUntisConfig | null;
+  vmm: VmmConfig | null;
+  onVmmChanged: (config: VmmConfig | null) => void;
   onSettingsSaved: () => void;
   onUntisSynced: (message: string) => void;
   onOpenAppleSyncModal: () => void;
@@ -24,7 +27,7 @@ interface SettingsModalProps {
   onBankingChanged: () => void;
 }
 
-export type SettingsTab = 'profile' | 'school' | 'subjects' | 'banks' | 'data';
+export type SettingsTab = 'profile' | 'school' | 'marks' | 'subjects' | 'banks' | 'data';
 type Tab = SettingsTab;
 
 interface SubjectDraft {
@@ -40,6 +43,7 @@ const COLOR_PALETTE = ['#2A4BDC', '#8B5CF6', '#EC4899', '#E11D48', '#F59E0B', '#
 const TABS: { id: Tab; label: string }[] = [
   { id: 'profile', label: 'Profil & Geld' },
   { id: 'school', label: 'WebUntis' },
+  { id: 'marks', label: 'Noten (VMM)' },
   { id: 'subjects', label: 'Fächer' },
   { id: 'banks', label: 'Banken' },
   { id: 'data', label: 'Daten' },
@@ -51,6 +55,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   user,
   subjects,
   untisConfig,
+  vmm,
+  onVmmChanged,
   onSettingsSaved,
   onUntisSynced,
   onOpenAppleSyncModal,
@@ -211,6 +217,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </>
         )}
+
+        {tab === 'marks' && <VmmSettings config={vmm} onChanged={onVmmChanged} />}
 
         {tab === 'subjects' && (
           <div>

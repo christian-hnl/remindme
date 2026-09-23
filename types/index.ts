@@ -119,6 +119,41 @@ export interface WebUntisConfig {
   }[];
 }
 
+/** One assessment as View My Marks stores it. */
+export interface VmmMark {
+  id?: string | number;
+  title: string;
+  value: string | number | null;
+  weight: number | null;
+  date: string | null;
+  category: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface VmmGroup {
+  id: string;
+  externalId: string;
+  name: string;
+  subjectName?: string | null;
+  teacher?: string | null;
+  average?: number | null;
+  marks: VmmMark[];
+  updatedAt: string;
+}
+
+/** View My Marks connection – the session cookie itself never reaches the browser. */
+export interface VmmConfig {
+  id: string;
+  email?: string | null;
+  username?: string | null;
+  role?: string | null;
+  isConnected: boolean;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+  updatedAt: string;
+  groups: VmmGroup[];
+}
+
 export interface SavingsPot {
   id: string;
   name: string;
@@ -456,6 +491,8 @@ export interface DashboardSummary {
   skills: Skill[];
   bibleBookmarks: BibleBookmark[];
   untisConfig: WebUntisConfig | null;
+  /** View My Marks connection and the grades pulled from it. */
+  vmm: VmmConfig | null;
   banking: {
     /** Enable Banking credentials are stored (or provided via environment). */
     configured: boolean;

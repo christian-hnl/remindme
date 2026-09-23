@@ -126,7 +126,7 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
     .slice(0, 12);
 
   return (
-    <section className="card" aria-label="Prüfungen">
+    <section id="exams-card" className="card" aria-label="Prüfungen">
       <div className="flex items-start justify-between gap-3 p-4 pb-2 sm:p-5 sm:pb-2">
         <div>
           <p className="eyebrow">Schule</p>
@@ -154,7 +154,7 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
               const urgency =
                 days <= 2 ? 'border-pen/40 bg-pen/10 text-pen' : days <= lead ? 'border-warn/40 bg-warn/10 text-warn' : 'border-line/15 text-ink-2';
               return (
-                <li key={exam.id} className="flex items-start gap-3 py-3">
+                <li key={exam.id} id={`exam-${exam.id}`} className="flex items-start gap-3 py-3">
                   <div className={`flex w-14 flex-shrink-0 flex-col items-center rounded-[10px] border py-1.5 ${urgency}`}>
                     <span className="font-display text-[24px] font-bold leading-none tabular">{days === 0 ? '!' : days}</span>
                     <span className="text-[10px] font-bold uppercase tracking-wide">{days === 0 ? 'heute' : days === 1 ? 'Tag' : 'Tage'}</span>

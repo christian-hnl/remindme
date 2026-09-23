@@ -43,3 +43,4 @@ dev.db-journal
 prisma/backups/
 *.db
 *.db-journal
+prompts
