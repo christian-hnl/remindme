@@ -36,6 +36,7 @@ model User {
   categoryRules   CategoryRule[]
   skills          Skill[]
   bibleBookmarks  BibleBookmark[]
+  vmmConfig       VmmConfig?
 }
 
 model WebUntisConfig {
@@ -172,6 +173,41 @@ model Exam {
   topicItems ExamTopic[]
 
   @@unique([userId, externalUntisId])
+}
+
+/// Connection to "View My Marks" (vmm.htlstp.ac.at), the school's grade portal.
+/// It logs in with a link sent by mail, so what we keep is the session it hands back.
+model VmmConfig {
+  id         String    @id @default(uuid())
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email      String?
+  /// Django session cookie – never leaves the server.
+  sessionId  String?
+  csrfToken  String?
+  username   String?
+  role       String?
+  lastSyncAt DateTime?
+  lastError  String?
+  updatedAt  DateTime  @updatedAt
+  groups     VmmGroup[]
+}
+
+/// One subject/group in VMM with the marks it holds, cached for offline viewing.
+model VmmGroup {
+  id          String    @id @default(uuid())
+  configId    String
+  config      VmmConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  externalId  String
+  name        String
+  subjectName String?
+  teacher     String?
+  average     Float?
+  /// Raw marks as VMM returns them, so nothing gets lost in translation.
+  marks       String    @default("[]")
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([configId, externalId])
 }
 
 /// Bible text cached from getbible.net, so reading stays fast and works offline.
