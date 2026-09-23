@@ -12,18 +12,34 @@ const normalize = (value: string) => fold(value).replace(/[^a-z0-9]/g, '');
 const words = (value: string) => fold(value).split(/[^a-z0-9]+/).filter(Boolean);
 
 /**
- * VMM group names read like "POS · Christoph Schreiber", Untis knows "POS", and the subject
+ * Untis codes carry the group along ("POS1", "BWM_3", "SENCYB_1") while VMM only knows the
+ * plain subject ("POS"). Comparing both the full code and that stem bridges the two.
+ */
+const codeForms = (code: string) => {
+  const full = normalize(code);
+  const stem = full.replace(/\d+$/, '');
+  return stem && stem !== full ? [full, stem] : [full];
+};
+
+/**
+ * VMM group names read like "POS · Christoph Schreiber", Untis knows "POS1", and the subject
  * carries both. The code has to match a whole word – otherwise "CH" finds "Christoph".
  */
 export function matchSubject(group: VmmGroup, subjects: Subject[]): Subject | null {
   const text = [group.name, group.subjectName ?? ''].join(' ');
   const tokens = new Set(words(text));
 
-  const codeMatch = subjects
-    .filter((s) => s.untisCode && tokens.has(normalize(s.untisCode)))
-    // The longest code wins, so "DBI" doesn't beat "DBI2".
-    .sort((a, b) => (b.untisCode?.length ?? 0) - (a.untisCode?.length ?? 0))[0];
-  if (codeMatch) return codeMatch;
+  const scored = subjects
+    .filter((s) => s.untisCode)
+    .map((subject) => {
+      const forms = codeForms(subject.untisCode!);
+      // An exact code beats a stem match, and a longer code beats a shorter one.
+      const rank = tokens.has(forms[0]) ? 2 : forms[1] && tokens.has(forms[1]) ? 1 : 0;
+      return { subject, rank, length: subject.untisCode!.length };
+    })
+    .filter((entry) => entry.rank > 0)
+    .sort((a, b) => b.rank - a.rank || b.length - a.length);
+  if (scored.length > 0) return scored[0].subject;
 
   const haystack = normalize(text);
   const nameMatch = subjects.find((s) => {

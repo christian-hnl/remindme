@@ -34,8 +34,9 @@ import { TaskMatrix } from './tasks/TaskMatrix';
 import { TaskModal } from './tasks/TaskModal';
 import { ExamsCard, type ExamPayload } from './school/ExamsCard';
 import { StudyPlanCard } from './school/StudyPlanCard';
-import { linkVmmGroups, vmmGradesForPlanner } from '@/lib/school/vmm-link';
-import { VmmGradesCard } from './school/VmmGradesCard';
+import { linkVmmGroups } from '@/lib/school/vmm-link';
+import { bySubject, mergeGrades, toPlannerGrades } from '@/lib/school/grades';
+import { GradeStatsCard } from './school/GradeStatsCard';
 import { GradesCard, type GradePayload } from './school/GradesCard';
 import { ShoppingList } from './life/ShoppingList';
 import { HabitsCard } from './life/HabitsCard';
@@ -216,14 +217,11 @@ function Dashboard({ initialData }: DashboardContainerProps) {
     setIsSettingsOpen(true);
   }, []);
 
-  // VMM marks are the real grades, so the study plan runs on them when they're there.
+  // One grade list out of both sources – everything school-side reads from it.
   const vmmLinks = useMemo(() => linkVmmGroups(data.vmm?.groups ?? [], data.subjects), [data.vmm, data.subjects]);
-  const plannerGrades = useMemo(() => {
-    const fromVmm = vmmGradesForPlanner(vmmLinks);
-    const covered = new Set(fromVmm.map((g) => g.subjectId));
-    // Manually kept grades still count for subjects VMM doesn't cover.
-    return [...fromVmm, ...data.grades.filter((g) => !g.subjectId || !covered.has(g.subjectId))];
-  }, [vmmLinks, data.grades]);
+  const mergedGrades = useMemo(() => mergeGrades(data.grades, vmmLinks), [data.grades, vmmLinks]);
+  const gradeRows = useMemo(() => bySubject(mergedGrades, data.subjects, vmmLinks), [mergedGrades, data.subjects, vmmLinks]);
+  const plannerGrades = useMemo(() => toPlannerGrades(mergedGrades), [mergedGrades]);
 
   /** Brings an exam from the study plan into view in the exams card. */
   const scrollToExam = useCallback((examId: string) => {
@@ -987,13 +985,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onDeleteTopic={handleDeleteExamTopic}
                   />
                 </div>
-                <div className="order-3 min-w-0">
-                  <VmmGradesCard
-                    config={data.vmm}
-                    subjects={data.subjects}
-                    onChanged={(config) => setData((d) => ({ ...d, vmm: config }))}
-                    onOpenSettings={() => openSettings('marks')}
-                  />
+                <div className="order-7 min-w-0">
+                  <GradeStatsCard grades={mergedGrades} rows={gradeRows} subjects={data.subjects} />
                 </div>
                 <div className="order-5 min-w-0">
                   <PomodoroTimer />
@@ -1014,8 +1007,12 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 <div className="order-6 min-w-0">{timetable}</div>
                 <div className="order-5 min-w-0">
                   <GradesCard
-                    grades={data.grades}
+                    grades={mergedGrades}
                     subjects={data.subjects}
+                    vmm={data.vmm}
+                    vmmLinks={vmmLinks}
+                    onVmmChanged={(config) => setData((d) => ({ ...d, vmm: config }))}
+                    onConnectVmm={() => openSettings('marks')}
                     request={pending?.kind === 'grade' ? pending.prefill ?? {} : null}
                     onRequestHandled={clearPending}
                     onSave={handleSaveGrade}
