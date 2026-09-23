@@ -7,7 +7,7 @@ import { Award, CloudOff, Plus, RefreshCw } from 'lucide-react';
 import type { GradeKind, Subject, VmmConfig } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { DEFAULT_GRADE_WEIGHT, GRADE_KINDS, GRADE_KIND_LABELS, GRADE_NAMES } from '@/lib/school';
-import { bySubject, type UnifiedGrade } from '@/lib/school/grades';
+import { unlinkedVmmGroups, type SubjectGrades, type UnifiedGrade } from '@/lib/school/grades';
 import type { VmmSubjectLink } from '@/lib/school/vmm-link';
 import { api, errorMessage } from '@/lib/client';
 import { useToast } from '@/components/ui/Toast';
@@ -24,6 +24,8 @@ export interface GradePayload {
 interface GradesCardProps {
   /** Manual grades and VMM marks already merged. */
   grades: UnifiedGrade[];
+  /** One row per subject that is taught, graded or known to VMM – built in the container. */
+  rows: SubjectGrades[];
   subjects: Subject[];
   vmm: VmmConfig | null;
   vmmLinks: VmmSubjectLink[];
@@ -43,6 +45,7 @@ const gradeColor = (value: number) =>
 
 export const GradesCard: React.FC<GradesCardProps> = ({
   grades,
+  rows,
   subjects,
   vmm,
   vmmLinks,
@@ -108,7 +111,7 @@ export const GradesCard: React.FC<GradesCardProps> = ({
     }
   };
 
-  const rows = useMemo(() => bySubject(grades, subjects, vmmLinks), [grades, subjects, vmmLinks]);
+  const orphans = useMemo(() => unlinkedVmmGroups(vmmLinks), [vmmLinks]);
 
   const averages = rows.map((r) => r.average).filter((a): a is number => a !== null);
   const overall = averages.length ? averages.reduce((s, a) => s + a, 0) / averages.length : null;
@@ -121,7 +124,11 @@ export const GradesCard: React.FC<GradesCardProps> = ({
           <p className="eyebrow">Schule</p>
           <h2 className="card-title mt-1">Noten</h2>
           <p className="mt-1 text-[13px] text-ink-3">
-            {overall === null ? 'Noch keine Noten' : `Gesamtschnitt ${formatGrade(overall, 2)} · ${grades.length} ${grades.length === 1 ? 'Note' : 'Noten'}`}
+            {overall === null
+              ? `${rows.length} ${rows.length === 1 ? 'Fach' : 'Fächer'} · noch keine Noten`
+              : `Gesamtschnitt ${formatGrade(overall, 2)} · ${grades.length} ${grades.length === 1 ? 'Note' : 'Noten'} in ${rows.length} ${
+                  rows.length === 1 ? 'Fach' : 'Fächern'
+                }`}
             {vmmCount > 0 && ` · ${vmmCount} aus VMM`}
           </p>
         </div>
@@ -150,7 +157,7 @@ export const GradesCard: React.FC<GradesCardProps> = ({
       <div className="px-4 pb-2 sm:px-5">
         {rows.length === 0 ? (
           <p className="py-6 text-center text-[14px] text-ink-3">
-            Trag deine Noten ein oder verbinde View My Marks – der Schnitt pro Fach wird automatisch berechnet.
+            Sobald der Stundenplan da ist, steht hier jedes Fach. Trag Noten ein oder verbinde View My Marks – der Schnitt pro Fach wird automatisch berechnet.
           </p>
         ) : (
           <ul className="divide-y divide-line/10">
@@ -225,6 +232,25 @@ export const GradesCard: React.FC<GradesCardProps> = ({
             })}
           </ul>
         )}
+        {orphans.length > 0 && (
+          <div className="mt-2 rounded-[10px] border border-warn/25 bg-warn/5 p-3">
+            <p className="text-[13px] font-bold text-ink">Aus VMM, aber keinem Fach zugeordnet</p>
+            <ul className="mt-1 space-y-0.5">
+              {orphans.map((link) => (
+                <li key={link.group.id} className="flex items-baseline justify-between gap-3 text-[13px] text-ink-2">
+                  <span className="min-w-0 truncate">{link.group.subjectName ?? link.group.name}</span>
+                  <span className="tabular flex-shrink-0 font-bold">
+                    {link.graded.length} {link.graded.length === 1 ? 'Note' : 'Noten'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1.5 text-[12px] text-ink-3">
+              Trag das Untis-Kürzel beim Fach nach, dann landen diese Noten beim richtigen Fach.
+            </p>
+          </div>
+        )}
+
         {rows.length > 0 && (
           <p className="pb-2 text-[12px] text-ink-3">
             Schularbeiten (dunkler Rand) zählen doppelt, Mitarbeit halb. Noten mit grauem Feld kommen aus View My Marks und lassen sich hier nicht ändern.

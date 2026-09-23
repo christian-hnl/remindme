@@ -4,9 +4,23 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { format, formatDistanceToNow } from 'date-fns';
 import { de } from 'date-fns/locale';
 import type { ScheduleBlock, Task, WebUntisConfig } from '@/types';
-import { AlertTriangle, ChevronLeft, ChevronRight, GraduationCap, Maximize2, Minimize2, Plus, RefreshCw, School } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  GraduationCap,
+  HelpCircle,
+  Maximize2,
+  Minimize2,
+  Plus,
+  RefreshCw,
+  School,
+} from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { CheckButton } from '@/components/ui/CheckButton';
+import { useToast } from '@/components/ui/Toast';
 import { minutesToTime, timeToMinutes, toDateInput } from '@/lib/format';
 import { api, errorMessage } from '@/lib/client';
 import { groupOverlapping } from '@/lib/lanes';
@@ -20,6 +34,8 @@ interface TimetableScheduleProps {
   onOpenUntisModal: () => void;
   onCreateTask: (subjectId?: string | null) => void;
   onEditTask: (task: Task) => void;
+  /** Reloads the dashboard after the user resolved a parallel slot. */
+  onScheduleChanged?: () => void | Promise<void>;
 }
 
 const DAYS = [
@@ -37,8 +53,11 @@ interface Period {
   endMin: number;
 }
 
+type ParallelLesson = NonNullable<WebUntisConfig['parallelSlots']>[number]['lessons'][number];
+
 const blockCode = (b: ScheduleBlock) => (b.subjectCode || b.title.slice(0, 3)).toUpperCase();
 const blockName = (b: ScheduleBlock) => b.subject?.name ?? b.title.split('(')[0].trim();
+const slotId = (day: number, startTime: string) => `${day}|${startTime}`;
 
 /** Up to three parallel lessons side by side; more wrap into further rows. */
 const parallelGrid = (count: number) => (count >= 3 ? 'grid-cols-3' : count === 2 ? 'grid-cols-2' : 'grid-cols-1');
@@ -91,7 +110,9 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   onOpenUntisModal,
   onCreateTask,
   onEditTask,
+  onScheduleChanged,
 }) => {
+  const toast = useToast();
   const clock = useClock();
   const todaysWeekday = clock && clock.weekday >= 1 && clock.weekday <= 5 ? clock.weekday : null;
   const minutesNow = clock?.minutes ?? -1;
@@ -99,15 +120,17 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
   const [selectedDay, setSelectedDay] = useState(1);
   const [subjectFilter, setSubjectFilter] = useState<string | null>(null);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [inspectId, setInspectId] = useState<string | null>(null);
+  const [savingSlot, setSavingSlot] = useState<string | null>(null);
   // 0 = the synced week in the database; other offsets are fetched live from WebUntis.
   const [weekOffset, setWeekOffset] = useState(0);
   const [weekCache, setWeekCache] = useState<Record<number, ScheduleBlock[]>>({});
   const [weekLoading, setWeekLoading] = useState(false);
   const [weekError, setWeekError] = useState<string | null>(null);
 
-  // "Today" markers and the now-line only make sense in the current week.
+  // "Today" markers and the progress bar only make sense in the current week.
   const schoolDay = weekOffset === 0 ? todaysWeekday : null;
 
   const mondayOf = (offset: number) => {
@@ -161,6 +184,58 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
     return periods.find((p) => start >= p.startMin && start <= p.lastStartMin)?.id ?? 0;
   };
 
+  /**
+   * WebUntis hands out the whole class timetable, so some slots still hold two lessons and
+   * only the student knows which one they attend. Those are settled right here in the plan
+   * instead of sending anyone into the settings.
+   */
+  const openChoices = useMemo(() => {
+    const map = new Map<string, ParallelLesson[]>();
+    for (const slot of untisConfig?.parallelSlots ?? []) {
+      const open = slot.lessons.filter((l) => !l.hidden);
+      if (open.length > 1) map.set(slotId(slot.day, slot.startTime), open);
+    }
+    return map;
+  }, [untisConfig]);
+
+  /** Lessons of a slot that were ruled out by hand – so a wrong tap can be taken back. */
+  const droppedChoices = useMemo(() => {
+    const map = new Map<string, ParallelLesson[]>();
+    for (const slot of untisConfig?.parallelSlots ?? []) {
+      const dropped = slot.lessons.filter((l) => l.hidden && !l.rotatedAway);
+      if (dropped.length > 0) map.set(slotId(slot.day, slot.startTime), dropped);
+    }
+    return map;
+  }, [untisConfig]);
+
+  const matchesBlock = (lesson: ParallelLesson, block: ScheduleBlock) =>
+    lesson.subjectCode === (block.subjectCode ?? '') && (lesson.studentGroup ?? null) === (block.studentGroup ?? null);
+
+  const saveHidden = async (keys: string[], message: string, slot: string) => {
+    setSavingSlot(slot);
+    try {
+      await api('/api/v1/webuntis/config', { body: { hiddenLessons: keys } });
+      toast(message);
+      await onScheduleChanged?.();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    } finally {
+      setSavingSlot(null);
+    }
+  };
+
+  /** Keeps one lesson of a parallel slot and hides the others. */
+  const pickLesson = (slot: string, keepKey: string) => {
+    const others = (openChoices.get(slot) ?? []).filter((l) => l.key !== keepKey).map((l) => l.key);
+    return saveHidden([...(untisConfig?.hiddenLessons ?? []), ...others], 'Passt – der Plan zeigt jetzt nur deine Stunde.', slot);
+  };
+
+  /** Puts the lessons of a slot back after a wrong tap. */
+  const undoSlot = (slot: string) => {
+    const dropped = new Set((droppedChoices.get(slot) ?? []).map((l) => l.key));
+    return saveHidden((untisConfig?.hiddenLessons ?? []).filter((k) => !dropped.has(k)), 'Die Stunden sind wieder da.', slot);
+  };
+
   const subjects = useMemo(() => {
     const map = new Map<string, { code: string; name: string; colorHex: string; count: number }>();
     for (const b of displaySchedule) {
@@ -188,32 +263,56 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
   const nextBlock = activeBlock || upcomingBlock ? undefined : todayLessons.find((b) => timeToMinutes(b.startTime) > minutesNow);
   const spotlight = activeBlock ?? upcomingBlock ?? nextBlock;
   const inspectBlock = displaySchedule.find((b) => b.id === inspectId) ?? null;
+  const openCount = openChoices.size;
 
   const weekMonday = mondayOf(weekOffset);
   const weekFriday = new Date(weekMonday);
   weekFriday.setDate(weekMonday.getDate() + 4);
-  const weekLabel =
-    weekOffset === 0
-      ? 'Diese Woche'
-      : `${format(weekMonday, 'd.M.')}–${format(weekFriday, 'd.M.')}`;
+  const dateOf = (day: number) => {
+    const d = new Date(weekMonday);
+    d.setDate(weekMonday.getDate() + day - 1);
+    return d;
+  };
+  const weekLabel = weekOffset === 0 ? 'Diese Woche' : `${format(weekMonday, 'd.M.')}–${format(weekFriday, 'd.M.')}`;
 
   const isDemo = untisConfig?.school === DEMO_SCHOOL;
   const syncFailed = untisConfig?.isConnected === false;
   const lastSync =
     clock && untisConfig?.lastSyncAt ? formatDistanceToNow(new Date(untisConfig.lastSyncAt), { addSuffix: true, locale: de }) : null;
 
-  const renderGridCard = (block: ScheduleBlock, compact: boolean) => {
+  const progress = activeBlock
+    ? Math.min(
+        100,
+        Math.max(
+          0,
+          Math.round(
+            ((minutesNow - timeToMinutes(activeBlock.startTime)) /
+              Math.max(1, timeToMinutes(activeBlock.endTime) - timeToMinutes(activeBlock.startTime))) *
+              100
+          )
+        )
+      )
+    : 0;
+
+  const renderGridCard = (block: ScheduleBlock, compact: boolean, undecided: boolean) => {
     const pending = block.tasks?.filter((t) => t.status !== 'done').length ?? 0;
     return (
       <button
         key={block.id}
         type="button"
         onClick={() => setInspectId(block.id)}
-        title={`${blockName(block)} · ${block.startTime}–${block.endTime}${block.room ? ` · ${block.room}` : ''}${block.teacher ? ` · ${block.teacher}` : ''}${block.isExam ? ' · Prüfung' : ''}`}
-        className={`block w-full min-w-0 rounded-[8px] border-l-[3px] text-left transition-[filter] hover:brightness-95 ${compact ? 'px-1.5 py-1.5' : 'p-2'} ${
-          block.isCancelled ? 'hatch' : ''
-        } ${isNow(block) ? 'ring-2 ring-marker ring-offset-1 ring-offset-sheet' : ''} ${block.isExam ? 'border-pen/70' : ''}`}
-        style={{ borderLeftColor: block.isExam ? undefined : block.colorHex, backgroundColor: block.isExam ? 'rgb(var(--pen) / 0.12)' : `${block.colorHex}1f` }}
+        title={`${blockName(block)} · ${block.startTime}–${block.endTime}${block.room ? ` · ${block.room}` : ''}${
+          block.teacher ? ` · ${block.teacher}` : ''
+        }${block.isExam ? ' · Prüfung' : ''}${undecided ? ' · noch offen: welche Stunde hast du?' : ''}`}
+        className={`block w-full min-w-0 rounded-[8px] border-l-[3px] text-left transition-[filter] hover:brightness-95 ${
+          compact ? 'px-1.5 py-1.5' : 'p-2'
+        } ${block.isCancelled ? 'hatch' : ''} ${isNow(block) ? 'ring-2 ring-marker ring-offset-1 ring-offset-sheet' : ''} ${
+          block.isExam ? 'border-pen/70' : ''
+        } ${undecided ? 'outline-dashed outline-1 outline-offset-[-1px] outline-warn/60' : ''}`}
+        style={{
+          borderLeftColor: block.isExam ? undefined : block.colorHex,
+          backgroundColor: block.isExam ? 'rgb(var(--pen) / 0.12)' : `${block.colorHex}1f`,
+        }}
       >
         <span className="flex items-baseline justify-between gap-1">
           <span
@@ -224,10 +323,14 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
             {block.isExam && <GraduationCap className="h-3.5 w-3.5 flex-shrink-0 text-pen" aria-label="Prüfung" />}
             {blockCode(block)}
           </span>
-          {pending > 0 && (
-            <span className="rounded bg-accent px-1 font-mono text-[10px] font-semibold leading-4 text-on-accent" title="Offene Hausübungen">
-              {compact ? pending : `${pending} HÜ`}
-            </span>
+          {undecided ? (
+            <HelpCircle className="h-3.5 w-3.5 flex-shrink-0 text-warn" aria-label="Noch offen" />
+          ) : (
+            pending > 0 && (
+              <span className="rounded bg-accent px-1 font-mono text-[10px] font-semibold leading-4 text-on-accent" title="Offene Hausübungen">
+                {compact ? pending : `${pending} HÜ`}
+              </span>
+            )
           )}
         </span>
         {!compact && <span className="mt-1 line-clamp-2 block text-[12px] font-bold leading-tight text-ink-2">{blockName(block)}</span>}
@@ -272,9 +375,9 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
         <button type="button" onClick={() => setInspectId(block.id)} className="block w-full min-w-0 text-left">
           <span className="flex items-start justify-between gap-2">
             <span
-              className={`flex min-w-0 items-center gap-1.5 font-display font-semibold leading-tight text-ink ${compact ? 'truncate text-[16px]' : 'text-[19px]'} ${
-                block.isCancelled ? 'line-through decoration-pen decoration-2' : ''
-              }`}
+              className={`flex min-w-0 items-center gap-1.5 font-display font-semibold leading-tight text-ink ${
+                compact ? 'truncate text-[16px]' : 'text-[19px]'
+              } ${block.isCancelled ? 'line-through decoration-pen decoration-2' : ''}`}
             >
               {block.isExam && <GraduationCap className="h-4 w-4 flex-shrink-0 text-pen" aria-label="Prüfung" />}
               {current ? <span className="marker">{blockName(block)}</span> : blockName(block)}
@@ -289,7 +392,9 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
           {compact && pending > 0 && <span className="mt-1 block text-[12px] font-bold text-accent">{pending} HÜ offen</span>}
         </button>
         {block.substitutionNote && (
-          <p className={`mt-1.5 text-[13px] font-bold ${block.isCancelled ? 'text-pen' : 'text-warn'} ${compact ? 'truncate' : ''}`}>{block.substitutionNote}</p>
+          <p className={`mt-1.5 text-[13px] font-bold ${block.isCancelled ? 'text-pen' : 'text-warn'} ${compact ? 'truncate' : ''}`}>
+            {block.substitutionNote}
+          </p>
         )}
         {!compact && (
           <>
@@ -307,10 +412,48 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
     );
   };
 
+  /** One tap in the plan settles a parallel slot – no detour through the settings. */
+  const renderChooser = (slot: string, blocks: ScheduleBlock[]) => {
+    const choices = openChoices.get(slot) ?? [];
+    const busy = savingSlot === slot;
+    return (
+      <div className="rounded-[10px] border border-dashed border-warn/50 bg-warn/5 p-3">
+        <p className="flex items-center gap-1.5 text-[13px] font-bold text-ink">
+          <HelpCircle className="h-4 w-4 flex-shrink-0 text-warn" /> Welche Stunde hast du?
+        </p>
+        <p className="mt-0.5 text-[12px] text-ink-3">WebUntis liefert hier die ganze Klasse. Ein Tipp und der Plan gehört dir.</p>
+        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+          {blocks.map((block) => {
+            const choice = choices.find((c) => matchesBlock(c, block));
+            return (
+              <button
+                key={block.id}
+                type="button"
+                disabled={busy || !choice}
+                onClick={() => choice && pickLesson(slot, choice.key)}
+                className="flex min-w-0 items-center gap-2 rounded-[9px] border border-line/15 bg-sheet p-2.5 text-left transition-colors hover:border-ink/40 disabled:opacity-50"
+              >
+                <span className="h-8 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: block.colorHex }} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-bold text-ink">{blockName(block)}</span>
+                  <span className="block truncate font-mono text-[12px] text-ink-3">
+                    {[block.teacher, block.room].filter(Boolean).join(' · ') || blockCode(block)}
+                  </span>
+                </span>
+                <Check className="h-4 w-4 flex-shrink-0 text-ink-3" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const dayGroups = groupOverlapping(filtered.filter((b) => b.dayOfWeek === selectedDay));
 
   return (
     <section
+      id="timetable-card"
       className={`card ${isFullscreen ? 'fixed inset-0 z-40 overflow-y-auto rounded-none sm:inset-4 sm:rounded-[16px]' : ''}`}
       aria-label="Stundenplan"
     >
@@ -369,7 +512,7 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
-          <div className="segmented w-[148px] grid-cols-2" role="group" aria-label="Ansicht">
+          <div className="segmented w-[132px] grid-cols-2" role="group" aria-label="Ansicht">
             <button type="button" aria-pressed={viewMode === 'week'} onClick={() => setViewMode('week')} className="segmented-item min-h-[34px]">
               Woche
             </button>
@@ -377,6 +520,18 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
               Tag
             </button>
           </div>
+          {subjects.length > 1 && (
+            <button
+              type="button"
+              onClick={() => setFilterOpen((v) => !v)}
+              aria-pressed={filterOpen || subjectFilter !== null}
+              className={`icon-btn ${subjectFilter ? 'text-accent' : ''}`}
+              aria-label="Nach Fach filtern"
+              title="Nach Fach filtern"
+            >
+              <Filter className="h-[18px] w-[18px]" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setIsFullscreen((v) => !v)}
@@ -397,7 +552,9 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
           {weekOffset !== 0 ? (
             <>
               <School className="mx-auto mb-3 h-8 w-8 text-ink-3" />
-              <p className="font-bold text-ink">{weekLoading ? 'Lädt diese Woche…' : weekError ? 'Woche nicht geladen' : 'Kein Unterricht in dieser Woche'}</p>
+              <p className="font-bold text-ink">
+                {weekLoading ? 'Lädt diese Woche…' : weekError ? 'Woche nicht geladen' : 'Kein Unterricht in dieser Woche'}
+              </p>
               {weekError && <p className="mb-4 mt-1 text-[14px] text-pen">{weekError}</p>}
               {!weekLoading && (
                 <button type="button" onClick={() => setWeekOffset(0)} className="btn-secondary mt-3">
@@ -418,8 +575,8 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
         </div>
       ) : (
         <>
-          {subjects.length > 1 && (
-            <div className="scrollbar-none flex gap-1 overflow-x-auto px-4 pb-3 sm:px-5" role="group" aria-label="Nach Fach filtern">
+          {filterOpen && subjects.length > 1 && (
+            <div className="scrollbar-none animate-in flex gap-1 overflow-x-auto px-4 pb-3 sm:px-5" role="group" aria-label="Nach Fach filtern">
               <button type="button" aria-pressed={subjectFilter === null} onClick={() => setSubjectFilter(null)} className="tab h-8 px-3 text-[13px]">
                 Alle
               </button>
@@ -442,25 +599,41 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
             <button
               type="button"
               onClick={() => setInspectId(spotlight.id)}
-              className="mx-4 mb-3 flex w-[calc(100%-2rem)] items-center justify-between gap-3 rounded-[10px] border border-line/10 bg-inset px-3 py-2.5 text-left sm:mx-5 sm:w-[calc(100%-2.5rem)]"
+              className="mx-4 mb-3 block w-[calc(100%-2rem)] rounded-[10px] border border-line/10 bg-inset px-3 py-2.5 text-left sm:mx-5 sm:w-[calc(100%-2.5rem)]"
             >
-              <span className="min-w-0">
-                <span className="eyebrow">
-                  {activeBlock
-                    ? `Jetzt · noch ${Math.max(0, timeToMinutes(spotlight.endTime) - minutesNow)} min`
-                    : upcomingBlock
-                      ? `Gleich · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`
-                      : `Als Nächstes · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`}
+              <span className="flex items-center justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="eyebrow">
+                    {activeBlock
+                      ? `Jetzt · noch ${Math.max(0, timeToMinutes(spotlight.endTime) - minutesNow)} min`
+                      : upcomingBlock
+                        ? `Gleich · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`
+                        : `Als Nächstes · in ${timeToMinutes(spotlight.startTime) - minutesNow} min`}
+                  </span>
+                  <span className="mt-0.5 block truncate font-display text-[20px] font-semibold leading-tight text-ink">
+                    <span className="marker">{blockName(spotlight)}</span>
+                  </span>
                 </span>
-                <span className="mt-0.5 block truncate font-display text-[20px] font-semibold leading-tight text-ink">
-                  <span className="marker">{blockName(spotlight)}</span>
+                <span className="flex-shrink-0 text-right font-mono text-[12px] text-ink-2 tabular">
+                  {spotlight.startTime}–{spotlight.endTime}
+                  {spotlight.room && <span className="block text-ink">{spotlight.room}</span>}
                 </span>
               </span>
-              <span className="flex-shrink-0 text-right font-mono text-[12px] text-ink-2 tabular">
-                {spotlight.startTime}–{spotlight.endTime}
-                {spotlight.room && <span className="block text-ink">{spotlight.room}</span>}
-              </span>
+              {activeBlock && (
+                <span className="mt-2 block h-1 overflow-hidden rounded-full bg-line/20" aria-hidden>
+                  <span className="block h-full rounded-full bg-marker" style={{ width: `${progress}%` }} />
+                </span>
+              )}
             </button>
+          )}
+
+          {openCount > 0 && weekOffset === 0 && (
+            <p className="mx-4 mb-3 flex items-start gap-2 rounded-[10px] bg-warn/10 p-2.5 text-[13px] text-warn sm:mx-5">
+              <HelpCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>
+                {openCount === 1 ? 'Eine Stunde ist noch offen' : `${openCount} Stunden sind noch offen`} – tipp sie an und sag, welche du hast.
+              </span>
+            </p>
           )}
 
           {viewMode === 'week' ? (
@@ -469,7 +642,7 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
                 <div className="grid grid-cols-[58px_repeat(5,minmax(0,1fr))] gap-1.5 pb-1.5">
                   <span />
                   {DAYS.map((d) => {
-                    const count = filtered.filter((b) => b.dayOfWeek === d.num).length;
+                    const count = filtered.filter((b) => b.dayOfWeek === d.num && !b.isCancelled).length;
                     return (
                       <button
                         key={d.num}
@@ -481,41 +654,55 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
                         className="rounded-md px-2 py-1 text-left hover:bg-inset"
                         title={`${d.name} als Tagesansicht`}
                       >
-                        <span className={`font-display text-[17px] font-semibold ${d.num === schoolDay ? 'marker text-ink' : 'text-ink-2'}`}>{d.name}</span>
-                        <span className="block font-mono text-[11px] text-ink-3">{count} Std.</span>
+                        <span className={`font-display text-[17px] font-semibold ${d.num === schoolDay ? 'marker text-ink' : 'text-ink-2'}`}>
+                          {d.name}
+                        </span>
+                        <span className="block font-mono text-[11px] text-ink-3">
+                          {format(dateOf(d.num), 'd.M.')} · {count} Std.
+                        </span>
                       </button>
                     );
                   })}
                 </div>
 
-                {periods.map((period) => (
-                  <div key={period.id} className="grid grid-cols-[58px_repeat(5,minmax(0,1fr))] gap-1.5 border-t border-line/10 py-1.5">
-                    <div className="pt-1 font-mono text-[12px] leading-tight text-ink-2 tabular">
-                      {minutesToTime(period.startMin)}
-                      <span className="block text-[11px] text-ink-3">{minutesToTime(period.endMin)}</span>
+                {periods.map((period) => {
+                  const running = schoolDay !== null && minutesNow >= period.startMin && minutesNow < period.endMin;
+                  return (
+                    <div key={period.id} className="grid grid-cols-[58px_repeat(5,minmax(0,1fr))] gap-1.5 border-t border-line/10 py-1.5">
+                      <div className={`pt-1 font-mono text-[12px] leading-tight tabular ${running ? 'font-bold text-ink' : 'text-ink-2'}`}>
+                        {minutesToTime(period.startMin)}
+                        <span className="block text-[11px] text-ink-3">{minutesToTime(period.endMin)}</span>
+                      </div>
+                      {DAYS.map((day) => {
+                        const lessons = filtered.filter((b) => b.dayOfWeek === day.num && periodOf(b) === period.id);
+                        const undecided = lessons.length > 1 && openChoices.has(slotId(day.num, lessons[0].startTime));
+                        return (
+                          <div
+                            key={day.num}
+                            className={`grid min-h-[68px] content-start gap-1 rounded-[9px] p-0.5 ${parallelGrid(lessons.length)} ${
+                              day.num === schoolDay ? 'bg-marker/[0.07]' : ''
+                            }`}
+                          >
+                            {lessons.map((b) => renderGridCard(b, lessons.length > 1, undecided))}
+                          </div>
+                        );
+                      })}
                     </div>
-                    {DAYS.map((day) => {
-                      const lessons = filtered.filter((b) => b.dayOfWeek === day.num && periodOf(b) === period.id);
-                      return (
-                        <div
-                          key={day.num}
-                          className={`grid min-h-[68px] content-start gap-1 rounded-[9px] p-0.5 ${parallelGrid(lessons.length)} ${
-                            day.num === schoolDay ? 'bg-marker/[0.07]' : ''
-                          }`}
-                        >
-                          {lessons.map((b) => renderGridCard(b, lessons.length > 1))}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (
             <div className="pb-4 sm:pb-5">
               <div className="scrollbar-none flex gap-1 overflow-x-auto px-4 pb-3 sm:px-5" role="group" aria-label="Tag wählen">
                 {DAYS.map((d) => (
-                  <button key={d.num} type="button" aria-pressed={selectedDay === d.num} onClick={() => setSelectedDay(d.num)} className="tab flex-1 justify-center px-2">
+                  <button
+                    key={d.num}
+                    type="button"
+                    aria-pressed={selectedDay === d.num}
+                    onClick={() => setSelectedDay(d.num)}
+                    className="tab flex-1 justify-center px-2"
+                  >
                     <span className="sm:hidden">{d.short}</span>
                     <span className="hidden sm:inline">{d.name}</span>
                     {d.num === schoolDay && <span className="h-1.5 w-1.5 rounded-full bg-marker" aria-label="heute" />}
@@ -527,19 +714,41 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
                 <p className="px-4 py-10 text-center text-[14px] text-ink-3 sm:px-5">Kein Unterricht an diesem Tag.</p>
               ) : (
                 <ol className="space-y-2 px-4 sm:px-5">
-                  {dayGroups.map((group) => {
+                  {dayGroups.map((group, index) => {
                     const end = minutesToTime(Math.max(...group.map((b) => timeToMinutes(b.endTime))));
                     const passed = selectedDay === schoolDay && minutesNow >= timeToMinutes(end);
+                    const previous = dayGroups[index - 1];
+                    const gap = previous ? timeToMinutes(group[0].startTime) - Math.max(...previous.map((b) => timeToMinutes(b.endTime))) : 0;
+                    const slot = slotId(selectedDay, group[0].startTime);
+                    const undecided = group.length > 1 && openChoices.has(slot);
                     return (
-                      <li key={group[0].id} className={`flex gap-3 ${passed ? 'opacity-55' : ''}`}>
-                        <div className="w-11 flex-shrink-0 pt-2.5 text-right font-mono text-[13px] leading-tight text-ink-2 tabular">
-                          {group[0].startTime}
-                          <span className="block text-[11px] text-ink-3">{end}</span>
-                        </div>
-                        <div className={`grid min-w-0 flex-1 gap-2 ${group.length >= 3 ? 'grid-cols-2 sm:grid-cols-3' : group.length === 2 ? 'grid-cols-2' : ''}`}>
-                          {group.map((block) => renderDayCard(block, group.length > 1))}
-                        </div>
-                      </li>
+                      <React.Fragment key={group[0].id}>
+                        {gap >= 15 && (
+                          <li className="flex items-center gap-3 text-[12px] text-ink-3" aria-hidden>
+                            <span className="w-11 flex-shrink-0" />
+                            <span className="h-px flex-1 bg-line/15" />
+                            <span className="font-mono tabular">{gap} min Pause</span>
+                            <span className="h-px flex-1 bg-line/15" />
+                          </li>
+                        )}
+                        <li className={`flex gap-3 ${passed ? 'opacity-55' : ''}`}>
+                          <div className="w-11 flex-shrink-0 pt-2.5 text-right font-mono text-[13px] leading-tight text-ink-2 tabular">
+                            {group[0].startTime}
+                            <span className="block text-[11px] text-ink-3">{end}</span>
+                          </div>
+                          {undecided ? (
+                            <div className="min-w-0 flex-1">{renderChooser(slot, group)}</div>
+                          ) : (
+                            <div
+                              className={`grid min-w-0 flex-1 gap-2 ${
+                                group.length >= 3 ? 'grid-cols-2 sm:grid-cols-3' : group.length === 2 ? 'grid-cols-2' : ''
+                              }`}
+                            >
+                              {group.map((block) => renderDayCard(block, group.length > 1))}
+                            </div>
+                          )}
+                        </li>
+                      </React.Fragment>
                     );
                   })}
                 </ol>
@@ -553,13 +762,17 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
         isOpen={!!inspectBlock}
         onClose={() => setInspectId(null)}
         title={inspectBlock ? blockName(inspectBlock) : ''}
-        subtitle={
-          inspectBlock && `${DAYS.find((d) => d.num === inspectBlock.dayOfWeek)?.name ?? ''} · ${inspectBlock.startTime}–${inspectBlock.endTime}`
-        }
+        subtitle={inspectBlock && `${DAYS.find((d) => d.num === inspectBlock.dayOfWeek)?.name ?? ''} · ${inspectBlock.startTime}–${inspectBlock.endTime}`}
         icon={<span className="h-3 w-3 rounded-[3px]" style={{ backgroundColor: inspectBlock?.colorHex }} />}
       >
         {inspectBlock && (
           <div className="space-y-5">
+            {openChoices.has(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) &&
+              renderChooser(
+                slotId(inspectBlock.dayOfWeek, inspectBlock.startTime),
+                displaySchedule.filter((b) => b.dayOfWeek === inspectBlock.dayOfWeek && b.startTime === inspectBlock.startTime)
+              )}
+
             <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line/10 bg-line/10">
               <div className="bg-sheet p-3">
                 <dt className="eyebrow">Raum</dt>
@@ -592,6 +805,21 @@ export const TimetableSchedule: React.FC<TimetableScheduleProps> = ({
                 <span className="font-bold">{inspectBlock.substitutionNote}</span>
               </p>
             )}
+
+            {!openChoices.has(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) &&
+              droppedChoices.has(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) && (
+                <button
+                  type="button"
+                  disabled={savingSlot === slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)}
+                  onClick={() => undoSlot(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime))}
+                  className="btn-ghost h-9 w-full justify-start px-2 text-[13px]"
+                >
+                  Doch falsch? {(droppedChoices.get(slotId(inspectBlock.dayOfWeek, inspectBlock.startTime)) ?? [])
+                    .map((l) => l.subjectName)
+                    .join(', ')}{' '}
+                  wieder anzeigen
+                </button>
+              )}
 
             <div>
               <div className="mb-1 flex items-center justify-between">

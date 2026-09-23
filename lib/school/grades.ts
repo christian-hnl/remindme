@@ -90,8 +90,12 @@ export interface SubjectGrades {
   vmm: VmmSubjectLink | null;
 }
 
-/** The merged grades grouped per subject, including subjects VMM covers but the app doesn't. */
-export function bySubject(merged: UnifiedGrade[], subjects: Subject[], links: VmmSubjectLink[]): SubjectGrades[] {
+/**
+ * The merged grades grouped per subject. Subjects in `taughtIds` – the ones that actually
+ * appear in the timetable – stay in the list even without a single grade, so the card shows
+ * the school year as it is and not just the fächer that happen to be on View My Marks.
+ */
+export function bySubject(merged: UnifiedGrade[], subjects: Subject[], links: VmmSubjectLink[], taughtIds?: Set<string>): SubjectGrades[] {
   return subjects
     .map((subject) => {
       const list = merged.filter((g) => g.subjectId === subject.id);
@@ -103,9 +107,12 @@ export function bySubject(merged: UnifiedGrade[], subjects: Subject[], links: Vm
         vmm: links.find((l) => l.subject?.id === subject.id) ?? null,
       };
     })
-    .filter((row) => row.grades.length > 0 || row.vmm !== null)
+    .filter((row) => row.grades.length > 0 || row.vmm !== null || taughtIds?.has(row.subject.id))
     .sort((a, b) => a.subject.name.localeCompare(b.subject.name, 'de'));
 }
+
+/** VMM groups no subject could be matched to – their marks would otherwise disappear. */
+export const unlinkedVmmGroups = (links: VmmSubjectLink[]) => links.filter((link) => !link.subject && link.graded.length > 0);
 
 /** Merged grades in the shape the study planner expects. */
 export const toPlannerGrades = (merged: UnifiedGrade[]) =>

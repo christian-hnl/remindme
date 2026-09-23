@@ -24,6 +24,7 @@ import type {
 import { TopBar } from './TopBar';
 import { CommandPalette } from './CommandPalette';
 import { MobileDock } from './MobileDock';
+import { FocusBar, Section, SectionFocusProvider, SectionTabs, useFocusState } from './layout/SectionFocus';
 import { MODE_META, MODE_ORDER } from './modes';
 import { TodayRuler } from './focus/TodayRuler';
 import { TimetableSchedule } from './focus/TimetableSchedule';
@@ -163,6 +164,9 @@ function Dashboard({ initialData }: DashboardContainerProps) {
   const detailsPot = data.savingsPots.find((p) => p.id === detailsPotId) ?? null;
   const clearPending = useCallback(() => setPending(null), []);
 
+  // One card at a time – the dock and the section tabs both drive this.
+  const focus = useFocusState(activeMode);
+
   // ---------------------------------------------------------------- mode
   const setActiveMode = useCallback((mode: WorkspaceMode) => {
     setActiveModeState(mode);
@@ -220,7 +224,15 @@ function Dashboard({ initialData }: DashboardContainerProps) {
   // One grade list out of both sources – everything school-side reads from it.
   const vmmLinks = useMemo(() => linkVmmGroups(data.vmm?.groups ?? [], data.subjects), [data.vmm, data.subjects]);
   const mergedGrades = useMemo(() => mergeGrades(data.grades, vmmLinks), [data.grades, vmmLinks]);
-  const gradeRows = useMemo(() => bySubject(mergedGrades, data.subjects, vmmLinks), [mergedGrades, data.subjects, vmmLinks]);
+  /** Every subject the (already group-filtered) timetable actually teaches. */
+  const taughtSubjectIds = useMemo(
+    () => new Set(data.schedule.map((b) => b.subjectId).filter((id): id is string => !!id)),
+    [data.schedule]
+  );
+  const gradeRows = useMemo(
+    () => bySubject(mergedGrades, data.subjects, vmmLinks, taughtSubjectIds),
+    [mergedGrades, data.subjects, vmmLinks, taughtSubjectIds]
+  );
   const plannerGrades = useMemo(() => toPlannerGrades(mergedGrades), [mergedGrades]);
 
   /** Brings an exam from the study plan into view in the exams card. */
@@ -827,6 +839,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
       onOpenUntisModal={() => setIsUntisModalOpen(true)}
       onCreateTask={openNewTask}
       onEditTask={openEditTask}
+      onScheduleChanged={refreshSummary}
     />
   );
 
@@ -903,9 +916,10 @@ function Dashboard({ initialData }: DashboardContainerProps) {
       />
 
       <main id="main" className="mx-auto max-w-[1400px] px-3 pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pt-8">
+        <SectionFocusProvider value={focus}>
         {activeMode === 'all' && (
           <div className="space-y-4 sm:space-y-6">
-            {!data.user.onboarded && (
+            {!data.user.onboarded && focus.phase !== 'focused' && (
               <WelcomeCard
                 onDone={refreshSummary}
                 onConnectUntis={() => setIsUntisModalOpen(true)}
@@ -916,6 +930,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 }}
               />
             )}
+            <Section id="ruler">
             <TodayRuler
               schedule={data.schedule}
               tasks={data.tasks}
@@ -926,19 +941,22 @@ function Dashboard({ initialData }: DashboardContainerProps) {
               safeToSpendDaily={data.metrics.safeToSpendDaily}
               onEditTask={openEditTask}
             />
+            </Section>
+            <FocusBar mode="all" />
+            <SectionTabs mode="all" />
             {/* Phones: to-dos first. Tablets: two columns. Desktop: plan left, to-dos right. */}
-            <div className="flex flex-col gap-4 sm:gap-6 md:grid md:grid-cols-2 md:items-start xl:grid-cols-12">
+            <div className={focus.phase === 'focused' ? 'block' : 'flex flex-col gap-4 sm:gap-6 md:grid md:grid-cols-2 md:items-start xl:grid-cols-12'}>
               <div className="contents xl:col-span-7 xl:flex xl:flex-col xl:gap-6">
-                <div className="order-4 min-w-0 md:col-span-2">{timetable}</div>
-                <div className="order-7 min-w-0">{miniCalendar}</div>
+                <Section id="timetable" className="order-4 md:col-span-2">{timetable}</Section>
+                <Section id="calendar" className="order-7">{miniCalendar}</Section>
               </div>
               <div className="contents xl:col-span-5 xl:flex xl:flex-col xl:gap-6">
-                <div className="order-1 min-w-0">{taskMatrix}</div>
-                <div className="order-2 min-w-0">{remindersHub}</div>
-                <div className="order-3 min-w-0">
+                <Section id="tasks" className="order-1">{taskMatrix}</Section>
+                <Section id="reminders" className="order-2">{remindersHub}</Section>
+                <Section id="upcoming" className="order-3">
                   <UpcomingCard exams={data.exams} birthdays={data.birthdays} onOpenStudy={() => setActiveMode('study')} onOpenLife={() => setActiveMode('life')} />
-                </div>
-                <div className="order-5 min-w-0">
+                </Section>
+                <Section id="verse" className="order-5">
                   <DailyVerseCard
                     compact
                     bookmarks={data.bibleBookmarks}
@@ -946,8 +964,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onRemoved={handleBookmarkRemoved}
                     onOpenBible={openVerseInBible}
                   />
-                </div>
-                <div className="order-6 min-w-0">{wallet}</div>
+                </Section>
+                <Section id="wallet" className="order-6">{wallet}</Section>
               </div>
             </div>
           </div>
@@ -955,6 +973,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
 
         {activeMode === 'study' && (
           <>
+            <Section id="mode-header">
             <ModeHeader
               mode="study"
               actions={
@@ -968,9 +987,12 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 </>
               }
             />
-            <div className="flex flex-col gap-4 sm:gap-6 xl:grid xl:grid-cols-12 xl:items-start">
+            </Section>
+            <FocusBar mode="study" />
+            <SectionTabs mode="study" />
+            <div className={focus.phase === 'focused' ? 'block' : 'flex flex-col gap-4 sm:gap-6 xl:grid xl:grid-cols-12 xl:items-start'}>
               <div className="contents xl:col-span-4 xl:flex xl:flex-col xl:gap-6">
-                <div className="order-2 min-w-0">
+                <Section id="exams" className="order-2">
                   <ExamsCard
                     exams={data.exams}
                     subjects={data.subjects}
@@ -984,18 +1006,18 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onToggleTopic={handleToggleExamTopic}
                     onDeleteTopic={handleDeleteExamTopic}
                   />
-                </div>
-                <div className="order-7 min-w-0">
+                </Section>
+                <Section id="stats" className="order-7">
                   <GradeStatsCard grades={mergedGrades} rows={gradeRows} subjects={data.subjects} />
-                </div>
-                <div className="order-5 min-w-0">
+                </Section>
+                <Section id="timer" className="order-5">
                   <PomodoroTimer />
-                </div>
-                <div className="order-6 min-w-0">{miniCalendar}</div>
+                </Section>
+                <Section id="calendar" className="order-6">{miniCalendar}</Section>
               </div>
               <div className="contents xl:col-span-8 xl:flex xl:flex-col xl:gap-6">
-                <div className="order-1 min-w-0">{taskMatrix}</div>
-                <div className="order-4 min-w-0">
+                <Section id="tasks" className="order-1">{taskMatrix}</Section>
+                <Section id="plan" className="order-4">
                   <StudyPlanCard
                     exams={data.exams}
                     grades={plannerGrades}
@@ -1003,11 +1025,12 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     gradeSource={vmmLinks.length > 0 ? 'View My Marks' : null}
                     onOpenExam={(exam) => scrollToExam(exam.id)}
                   />
-                </div>
-                <div className="order-6 min-w-0">{timetable}</div>
-                <div className="order-5 min-w-0">
+                </Section>
+                <Section id="timetable" className="order-6">{timetable}</Section>
+                <Section id="grades" className="order-5">
                   <GradesCard
                     grades={mergedGrades}
+                    rows={gradeRows}
                     subjects={data.subjects}
                     vmm={data.vmm}
                     vmmLinks={vmmLinks}
@@ -1018,7 +1041,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onSave={handleSaveGrade}
                     onDelete={handleDeleteGrade}
                   />
-                </div>
+                </Section>
               </div>
             </div>
           </>
@@ -1026,6 +1049,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
 
         {activeMode === 'life' && (
           <>
+            <Section id="mode-header">
             <ModeHeader
               mode="life"
               actions={
@@ -1034,15 +1058,18 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 </button>
               }
             />
-            <div className="flex flex-col gap-4 sm:gap-6 lg:grid lg:grid-cols-12 lg:items-start">
+            </Section>
+            <FocusBar mode="life" />
+            <SectionTabs mode="life" />
+            <div className={focus.phase === 'focused' ? 'block' : 'flex flex-col gap-4 sm:gap-6 lg:grid lg:grid-cols-12 lg:items-start'}>
               <div className="contents lg:col-span-7 lg:flex lg:flex-col lg:gap-6">
-                <div className="order-1 min-w-0">{remindersHub}</div>
-                <div className="order-3 min-w-0">
+                <Section id="reminders" className="order-1">{remindersHub}</Section>
+                <Section id="habits" className="order-3">
                   <HabitsCard habits={data.habits} onAdd={handleAddHabit} onToggleDay={handleToggleHabitDay} onDelete={handleDeleteHabit} />
-                </div>
+                </Section>
               </div>
               <div className="contents lg:col-span-5 lg:flex lg:flex-col lg:gap-6">
-                <div className="order-2 min-w-0">
+                <Section id="shopping" className="order-2">
                   <ShoppingList
                     items={data.shopping}
                     focusRequest={pending?.kind === 'shopping'}
@@ -1052,8 +1079,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onDelete={handleDeleteShopping}
                     onClearDone={handleClearShopping}
                   />
-                </div>
-                <div className="order-4 min-w-0">
+                </Section>
+                <Section id="birthdays" className="order-4">
                   <BirthdaysCard
                     birthdays={data.birthdays}
                     createRequest={pending?.kind === 'birthday'}
@@ -1061,7 +1088,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onAdd={handleAddBirthday}
                     onDelete={handleDeleteBirthday}
                   />
-                </div>
+                </Section>
               </div>
             </div>
           </>
@@ -1257,9 +1284,21 @@ function Dashboard({ initialData }: DashboardContainerProps) {
             />
           </>
         )}
+        </SectionFocusProvider>
       </main>
 
-      <MobileDock activeMode={activeMode} setActiveMode={setActiveMode} onOpenQuickAdd={() => setIsQuickOpen(true)} />
+      <MobileDock
+        activeMode={activeMode}
+        setActiveMode={setActiveMode}
+        onOpenQuickAdd={() => setIsQuickOpen(true)}
+        focusedSection={focus.focusId}
+        onOpenSection={(mode, sectionId) => {
+          if (mode !== activeMode) setActiveMode(mode);
+          if (sectionId) focus.open(sectionId);
+          else focus.close();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
 
       {/* Global modals */}
       <QuickCreateSheet isOpen={isQuickOpen} onClose={() => setIsQuickOpen(false)} onSelect={quickCreate} />
