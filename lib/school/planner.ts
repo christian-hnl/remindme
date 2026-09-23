@@ -77,7 +77,7 @@ const isoWeekKey = (date: Date) => {
  * Turns exams, grades and subjects into a study plan: what each exam needs, how risky it is
  * and in which order to tackle a week that carries several of them.
  */
-export function buildExamPlan(exams: Exam[], grades: PlannerGrade[], subjects: Subject[], now = new Date(), horizonDays = 45): ExamPlanEntry[] {
+export function buildExamPlan(exams: Exam[], grades: PlannerGrade[], subjects: Subject[], now = new Date(), horizonDays = 70): ExamPlanEntry[] {
   const upcoming = exams
     .filter((e) => !e.isDone && daysUntil(new Date(e.date), now) >= 0 && daysUntil(new Date(e.date), now) <= horizonDays)
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());

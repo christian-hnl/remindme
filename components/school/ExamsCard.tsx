@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { addDays, format } from 'date-fns';
 import { de } from 'date-fns/locale';
-import { ChevronDown, GraduationCap, Plus, RadioTower, Trash2 } from 'lucide-react';
+import { CalendarDays, ChevronDown, GraduationCap, Plus, RadioTower, Sparkles, Trash2 } from 'lucide-react';
 import type { Exam, ExamKind, Subject } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { CheckButton } from '@/components/ui/CheckButton';
@@ -30,6 +30,8 @@ interface ExamsCardProps {
   onAddTopic: (examId: string, title: string) => void;
   onToggleTopic: (examId: string, topicId: string, isDone: boolean) => void;
   onDeleteTopic: (examId: string, topicId: string) => void;
+  /** The study plan built from these exams – lives in the same card, one tab over. */
+  plan?: React.ReactNode;
 }
 
 const emptyForm = () => ({
@@ -52,7 +54,9 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
   onAddTopic,
   onToggleTopic,
   onDeleteTopic,
+  plan,
 }) => {
+  const [tab, setTab] = useState<'termine' | 'plan'>('termine');
   const [isOpen, setIsOpen] = useState(false);
   const [editing, setEditing] = useState<Exam | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -142,7 +146,20 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
         </button>
       </div>
 
-      <div className="px-4 pb-2 sm:px-5">
+      {plan && (
+        <div className="px-4 pb-3 pt-2 sm:px-5">
+          <div className="segmented grid-cols-2 sm:inline-grid" role="group" aria-label="Ansicht">
+            <button type="button" aria-pressed={tab === 'termine'} onClick={() => setTab('termine')} className="segmented-item px-3">
+              <CalendarDays className="h-4 w-4" /> Termine
+            </button>
+            <button type="button" aria-pressed={tab === 'plan'} onClick={() => setTab('plan')} className="segmented-item px-3">
+              <Sparkles className="h-4 w-4" /> Lernplan
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className={`px-4 pb-2 sm:px-5 ${plan && tab === 'plan' ? 'hidden' : ''}`}>
         {upcoming.length === 0 ? (
           <p className="py-6 text-center text-[14px] text-ink-3">Trag Schularbeiten und Tests ein – dann siehst du, wann du lernen solltest.</p>
         ) : (
@@ -218,6 +235,8 @@ export const ExamsCard: React.FC<ExamsCardProps> = ({
           </div>
         )}
       </div>
+
+      {plan && tab === 'plan' && <div className="px-4 pb-4 sm:px-5">{plan}</div>}
 
       <Modal
         isOpen={isOpen}

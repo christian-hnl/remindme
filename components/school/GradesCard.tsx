@@ -3,12 +3,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { de } from 'date-fns/locale';
-import { Award, ChevronDown, CloudOff, Plus, RefreshCw } from 'lucide-react';
+import { Award, BarChart3, ChevronDown, CloudOff, LineChart, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import type { GradeKind, Subject, VmmConfig } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { DEFAULT_GRADE_WEIGHT, GRADE_KINDS, GRADE_KIND_LABELS, GRADE_NAMES } from '@/lib/school';
 import { unlinkedVmmGroups, type SubjectGrades, type UnifiedGrade } from '@/lib/school/grades';
+import { buildGradeStats } from '@/lib/school/stats';
 import type { VmmSubjectLink } from '@/lib/school/vmm-link';
+import { StatsHistory, StatsOverview, StatsSubjects } from './GradeStatsViews';
 import { api, errorMessage } from '@/lib/client';
 import { useToast } from '@/components/ui/Toast';
 import { toDateInput, fromDateInput } from '@/lib/format';
@@ -39,9 +41,63 @@ interface GradesCardProps {
 }
 
 const formatGrade = (value: number, digits = 0) => value.toFixed(digits).replace('.', ',');
+const gradeDigits = (value: number) => (value % 1 ? 1 : 0);
 
-const gradeColor = (value: number) =>
-  value >= 4.5 ? 'text-pen' : value >= 3.5 ? 'text-warn' : value <= 1.5 ? 'text-leaf' : 'text-ink';
+const gradeColor = (value: number) => (value >= 4.5 ? 'text-pen' : value >= 3.5 ? 'text-warn' : value <= 1.5 ? 'text-leaf' : 'text-ink');
+
+/** One subject as a card: name, the grades so far and the average that comes out of them. */
+function SubjectCard({ row, onOpen }: { row: SubjectGrades; onOpen: () => void }) {
+  const { subject, grades: list, average, vmm: link } = row;
+  const empty = list.length === 0;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`flex min-w-0 flex-col rounded-[12px] border p-3 text-left transition-colors hover:border-ink/25 ${
+        empty ? 'border-dashed border-line/20' : 'border-line/10 bg-inset/50'
+      }`}
+      aria-label={empty ? `Note für ${subject.name} eintragen` : `Noten in ${subject.name} anzeigen`}
+    >
+      <span className="flex w-full items-start gap-2">
+        <span className="mt-[3px] h-2.5 w-2.5 flex-shrink-0 rounded-[3px]" style={{ backgroundColor: subject.colorHex }} />
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 block text-[14px] font-bold leading-tight text-ink">{subject.name}</span>
+          <span className="mt-0.5 block text-[11px] text-ink-3">
+            {empty ? 'Noch keine Note' : `${list.length} ${list.length === 1 ? 'Note' : 'Noten'}`}
+            {link && ' · VMM'}
+          </span>
+        </span>
+        {average === null ? (
+          <Plus className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-3" />
+        ) : (
+          <span className="flex-shrink-0 text-right">
+            <span className={`block font-display text-[26px] font-bold leading-none tabular ${gradeColor(average)}`}>{formatGrade(average, 1)}</span>
+            <span className="text-[10px] text-ink-3">{GRADE_NAMES[Math.min(5, Math.max(1, Math.round(average)))]}</span>
+          </span>
+        )}
+      </span>
+
+      {!empty && (
+        <span className="mt-2 flex flex-wrap gap-1">
+          {list.slice(0, 10).map((g) => (
+            <span
+              key={g.id}
+              title={`${GRADE_KIND_LABELS[g.kind]}${g.date ? ` · ${format(new Date(g.date), 'd. MMM', { locale: de })}` : ''}`}
+              className={`flex h-6 min-w-[24px] items-center justify-center rounded-md px-1 font-mono text-[12px] font-semibold ${
+                g.kind === 'schularbeit' ? 'border-2 border-ink/50' : 'border border-line/15'
+              } ${g.source === 'vmm' ? 'bg-inset' : ''} ${gradeColor(g.value)}`}
+            >
+              {formatGrade(g.value, gradeDigits(g.value))}
+            </span>
+          ))}
+          {list.length > 10 && <span className="self-center text-[11px] text-ink-3">+{list.length - 10}</span>}
+        </span>
+      )}
+
+      {average !== null && average > 4.49 && <span className="mt-1.5 block text-[11px] font-bold text-pen">Achtung: „Nicht genügend“ droht</span>}
+    </button>
+  );
+}
 
 export const GradesCard: React.FC<GradesCardProps> = ({
   grades,
@@ -57,9 +113,10 @@ export const GradesCard: React.FC<GradesCardProps> = ({
   onDelete,
 }) => {
   const toast = useToast();
+  const [view, setView] = useState<'faecher' | 'statistik' | 'verlauf'>('faecher');
   const [isOpen, setIsOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [openSubjectId, setOpenSubjectId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   // Fächer ohne Note sind da, drängeln sich aber nicht vor die, um die es geht.
   const [showEmpty, setShowEmpty] = useState(false);
   const [form, setForm] = useState({ subjectId: '', value: 0, kind: 'test' as GradeKind, date: toDateInput(new Date()), title: '' });
@@ -79,8 +136,8 @@ export const GradesCard: React.FC<GradesCardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
 
-  const openCreate = () => {
-    setForm({ subjectId: '', value: 0, kind: 'test', date: toDateInput(new Date()), title: '' });
+  const openCreate = (subjectId = '') => {
+    setForm({ subjectId, value: 0, kind: 'test', date: toDateInput(new Date()), title: '' });
     setIsOpen(true);
   };
 
@@ -114,87 +171,20 @@ export const GradesCard: React.FC<GradesCardProps> = ({
   };
 
   const orphans = useMemo(() => unlinkedVmmGroups(vmmLinks), [vmmLinks]);
+  const stats = useMemo(() => buildGradeStats(grades, rows), [grades, rows]);
   const graded = rows.filter((r) => r.grades.length > 0);
   const ungraded = rows.filter((r) => r.grades.length === 0);
+  const detail = rows.find((r) => r.subject.id === detailId) ?? null;
 
-  const averages = rows.map((r) => r.average).filter((a): a is number => a !== null);
+  const averages = graded.map((r) => r.average).filter((a): a is number => a !== null);
   const overall = averages.length ? averages.reduce((s, a) => s + a, 0) / averages.length : null;
   const vmmCount = grades.filter((g) => g.source === 'vmm').length;
 
-  /** One subject line – used by both groups below. */
-  const renderRow = ({ subject, grades: list, average, vmm: link }: SubjectGrades) => {
-    const open = openSubjectId === subject.id;
-    return (
-      <li key={subject.id} className="py-3">
-        <div className="flex items-center gap-3">
-          <span className="h-10 w-1 flex-shrink-0 rounded-full" style={{ backgroundColor: subject.colorHex }} />
-          <div className="min-w-0 flex-1">
-            <p className="flex items-baseline gap-2 truncate text-[15px] font-bold text-ink">
-              {subject.name}
-              {link && <span className="text-[11px] font-normal text-ink-3">VMM</span>}
-            </p>
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {list.slice(0, 12).map((g) => (
-                <button
-                  key={g.id}
-                  type="button"
-                  onClick={() => {
-                    if (g.source === 'vmm') {
-                      setOpenSubjectId(open ? null : subject.id);
-                      return;
-                    }
-                    if (window.confirm(`Note ${formatGrade(g.value, g.value % 1 ? 1 : 0)} (${GRADE_KIND_LABELS[g.kind]}) löschen?`)) onDelete(g.id);
-                  }}
-                  title={`${GRADE_KIND_LABELS[g.kind]}${g.date ? ` · ${format(new Date(g.date), 'd. MMM', { locale: de })}` : ''}${
-                    g.title ? ` · ${g.title}` : ''
-                  } – ${g.source === 'vmm' ? 'aus View My Marks' : 'tippen zum Löschen'}`}
-                  className={`flex h-7 min-w-[28px] items-center justify-center rounded-md px-1 font-mono text-[13px] font-semibold ${
-                    g.kind === 'schularbeit' ? 'border-2 border-ink/50' : 'border border-line/15'
-                  } ${g.source === 'vmm' ? 'bg-inset' : ''} ${gradeColor(g.value)}`}
-                >
-                  {formatGrade(g.value, g.value % 1 ? 1 : 0)}
-                </button>
-              ))}
-              {list.length === 0 && <span className="text-[13px] text-ink-3">Noch keine Note</span>}
-            </div>
-            {average !== null && average > 4.49 && <p className="mt-1 text-[12px] font-bold text-pen">Achtung: „Nicht genügend“ droht</p>}
-          </div>
-          {average !== null && (
-            <button
-              type="button"
-              onClick={() => setOpenSubjectId(open ? null : subject.id)}
-              className="flex-shrink-0 text-right"
-              aria-expanded={open}
-              aria-label={`Noten in ${subject.name} anzeigen`}
-            >
-              <span className={`block font-display text-[30px] font-bold leading-none tabular ${gradeColor(average)}`}>{formatGrade(average, 1)}</span>
-              <span className="text-[11px] text-ink-3">{GRADE_NAMES[Math.min(5, Math.max(1, Math.round(average)))]}</span>
-            </button>
-          )}
-        </div>
-
-        {open && list.length > 0 && (
-          <ul className="ml-4 mt-2 space-y-1 rounded-[10px] bg-inset p-3 text-[13px]">
-            {list.map((g) => (
-              <li key={`detail-${g.id}`} className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 truncate text-ink-2">
-                  {g.title ?? GRADE_KIND_LABELS[g.kind]}
-                  {g.date && ` · ${format(new Date(g.date), 'd. MMM yyyy', { locale: de })}`}
-                  {g.weight !== 1 && ` · ×${g.weight}`}
-                  {g.source === 'vmm' && ' · VMM'}
-                </span>
-                <span className={`tabular font-bold ${gradeColor(g.value)}`}>{formatGrade(g.value, g.value % 1 ? 1 : 0)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </li>
-    );
-  };
+  const openSubject = (row: SubjectGrades) => (row.grades.length === 0 ? openCreate(row.subject.id) : setDetailId(row.subject.id));
 
   return (
     <section className="card" aria-label="Noten">
-      <div className="flex flex-wrap items-start justify-between gap-3 p-4 pb-2 sm:p-5 sm:pb-2">
+      <div className="flex flex-wrap items-start justify-between gap-3 p-4 pb-3 sm:p-5 sm:pb-3">
         <div className="min-w-0">
           <p className="eyebrow">Schule</p>
           <h2 className="card-title mt-1">Noten</h2>
@@ -209,7 +199,14 @@ export const GradesCard: React.FC<GradesCardProps> = ({
         </div>
         <div className="flex flex-shrink-0 items-center gap-1">
           {vmm?.isConnected ? (
-            <button type="button" onClick={syncVmm} disabled={syncing} className="icon-btn h-9 w-9" aria-label="Noten aus VMM abrufen" title="Noten aus VMM abrufen">
+            <button
+              type="button"
+              onClick={syncVmm}
+              disabled={syncing}
+              className="icon-btn h-9 w-9"
+              aria-label="Noten aus VMM abrufen"
+              title="Noten aus View My Marks abrufen"
+            >
               <RefreshCw className={`h-[17px] w-[17px] ${syncing ? 'animate-spin' : ''}`} />
             </button>
           ) : (
@@ -217,11 +214,27 @@ export const GradesCard: React.FC<GradesCardProps> = ({
               <CloudOff className="h-4 w-4" /> VMM
             </button>
           )}
-          <button type="button" onClick={openCreate} className="btn-primary h-9 px-3">
+          <button type="button" onClick={() => openCreate()} className="btn-primary h-9 px-3">
             <Plus className="h-4 w-4" strokeWidth={2.5} /> Note
           </button>
         </div>
       </div>
+
+      {grades.length > 0 && (
+        <div className="px-4 pb-3 sm:px-5">
+          <div className="segmented grid-cols-3 sm:inline-grid" role="group" aria-label="Ansicht">
+            <button type="button" aria-pressed={view === 'faecher'} onClick={() => setView('faecher')} className="segmented-item px-3">
+              <Award className="h-4 w-4" /> Fächer
+            </button>
+            <button type="button" aria-pressed={view === 'statistik'} onClick={() => setView('statistik')} className="segmented-item px-3">
+              <BarChart3 className="h-4 w-4" /> Statistik
+            </button>
+            <button type="button" aria-pressed={view === 'verlauf'} onClick={() => setView('verlauf')} className="segmented-item px-3">
+              <LineChart className="h-4 w-4" /> Verlauf
+            </button>
+          </div>
+        </div>
+      )}
 
       {vmm && !vmm.isConnected && vmmCount > 0 && (
         <p className="mx-4 mb-2 rounded-[10px] bg-warn/10 p-3 text-[13px] text-warn sm:mx-5">
@@ -229,72 +242,153 @@ export const GradesCard: React.FC<GradesCardProps> = ({
         </p>
       )}
 
-      <div className="px-4 pb-2 sm:px-5">
-        {rows.length === 0 ? (
-          <p className="py-6 text-center text-[14px] text-ink-3">
-            Sobald der Stundenplan da ist, steht hier jedes Fach. Trag Noten ein oder verbinde View My Marks – der Schnitt pro Fach wird automatisch berechnet.
-          </p>
-        ) : (
+      <div className="px-4 pb-4 sm:px-5 sm:pb-5">
+        {view === 'statistik' && (
           <>
-            {graded.length > 0 && (
-              <>
-                <p className="eyebrow pb-1 pt-1">Mit Noten · {graded.length}</p>
-                <ul className="divide-y divide-line/10">{graded.map(renderRow)}</ul>
-              </>
-            )}
+            <StatsOverview stats={stats} />
+            <StatsSubjects stats={stats} />
+          </>
+        )}
 
-            {ungraded.length > 0 && (
-              <div className={graded.length > 0 ? 'mt-3 border-t border-line/10 pt-2' : ''}>
-                <button
-                  type="button"
-                  onClick={() => setShowEmpty((v) => !v)}
-                  aria-expanded={showEmpty}
-                  className="flex w-full items-center justify-between gap-2 py-1 text-left"
-                >
-                  <span className="eyebrow">Noch keine Note · {ungraded.length}</span>
-                  <ChevronDown className={`h-4 w-4 flex-shrink-0 text-ink-3 transition-transform ${showEmpty ? 'rotate-180' : ''}`} />
-                </button>
-                {showEmpty ? (
-                  <ul className="divide-y divide-line/10">{ungraded.map(renderRow)}</ul>
-                ) : (
-                  <div className="flex flex-wrap gap-1 pb-2 pt-1">
-                    {ungraded.map(({ subject }) => (
-                      <span key={subject.id} className="chip gap-1.5">
-                        <span className="h-2 w-2 flex-shrink-0 rounded-[2px]" style={{ backgroundColor: subject.colorHex }} />
-                        {subject.name}
-                      </span>
-                    ))}
+        {view === 'verlauf' && <StatsHistory stats={stats} />}
+
+        {view === 'faecher' && (
+          <>
+            {rows.length === 0 ? (
+              <p className="py-6 text-center text-[14px] text-ink-3">
+                Sobald der Stundenplan da ist, steht hier jedes Fach. Trag Noten ein oder verbinde View My Marks – der Schnitt pro Fach wird
+                automatisch berechnet.
+              </p>
+            ) : (
+              <>
+                {graded.length > 0 && (
+                  <>
+                    <p className="eyebrow pb-2">Mit Noten · {graded.length}</p>
+                    <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+                      {graded.map((row) => (
+                        <SubjectCard key={row.subject.id} row={row} onOpen={() => openSubject(row)} />
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {ungraded.length > 0 && (
+                  <div className={graded.length > 0 ? 'mt-4 border-t border-line/10 pt-3' : ''}>
+                    <button
+                      type="button"
+                      onClick={() => setShowEmpty((v) => !v)}
+                      aria-expanded={showEmpty}
+                      className="flex w-full items-center justify-between gap-2 pb-2 text-left"
+                    >
+                      <span className="eyebrow">Noch keine Note · {ungraded.length}</span>
+                      <ChevronDown className={`h-4 w-4 flex-shrink-0 text-ink-3 transition-transform ${showEmpty ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showEmpty ? (
+                      <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+                        {ungraded.map((row) => (
+                          <SubjectCard key={row.subject.id} row={row} onOpen={() => openSubject(row)} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {ungraded.map(({ subject }) => (
+                          <button key={subject.id} type="button" onClick={() => openCreate(subject.id)} className="chip gap-1.5 hover:border-ink/30">
+                            <span className="h-2 w-2 flex-shrink-0 rounded-[2px]" style={{ backgroundColor: subject.colorHex }} />
+                            {subject.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+
+                {orphans.length > 0 && (
+                  <div className="mt-4 rounded-[10px] border border-warn/25 bg-warn/5 p-3">
+                    <p className="text-[13px] font-bold text-ink">Aus VMM, aber keinem Fach zugeordnet</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {orphans.map((link) => (
+                        <li key={link.group.id} className="flex items-baseline justify-between gap-3 text-[13px] text-ink-2">
+                          <span className="min-w-0 truncate">{link.group.subjectName ?? link.group.name}</span>
+                          <span className="tabular flex-shrink-0 font-bold">
+                            {link.graded.length} {link.graded.length === 1 ? 'Note' : 'Noten'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-1.5 text-[12px] text-ink-3">Trag das Untis-Kürzel beim Fach nach, dann landen diese Noten beim richtigen Fach.</p>
+                  </div>
+                )}
+
+                {graded.length > 0 && (
+                  <p className="mt-3 text-[12px] text-ink-3">
+                    Schularbeiten (dunkler Rand) zählen doppelt, Mitarbeit halb. Noten mit grauem Feld kommen aus View My Marks und lassen sich hier
+                    nicht ändern.
+                  </p>
+                )}
+              </>
             )}
           </>
         )}
-        {orphans.length > 0 && (
-          <div className="mt-2 rounded-[10px] border border-warn/25 bg-warn/5 p-3">
-            <p className="text-[13px] font-bold text-ink">Aus VMM, aber keinem Fach zugeordnet</p>
-            <ul className="mt-1 space-y-0.5">
-              {orphans.map((link) => (
-                <li key={link.group.id} className="flex items-baseline justify-between gap-3 text-[13px] text-ink-2">
-                  <span className="min-w-0 truncate">{link.group.subjectName ?? link.group.name}</span>
-                  <span className="tabular flex-shrink-0 font-bold">
-                    {link.graded.length} {link.graded.length === 1 ? 'Note' : 'Noten'}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-1.5 text-[12px] text-ink-3">
-              Trag das Untis-Kürzel beim Fach nach, dann landen diese Noten beim richtigen Fach.
-            </p>
-          </div>
-        )}
-
-        {rows.length > 0 && (
-          <p className="pb-2 text-[12px] text-ink-3">
-            Schularbeiten (dunkler Rand) zählen doppelt, Mitarbeit halb. Noten mit grauem Feld kommen aus View My Marks und lassen sich hier nicht ändern.
-          </p>
-        )}
       </div>
+
+      <Modal
+        isOpen={!!detail}
+        onClose={() => setDetailId(null)}
+        size="sm"
+        title={detail?.subject.name ?? ''}
+        subtitle={
+          detail && detail.average !== null
+            ? `Schnitt ${formatGrade(detail.average, 2)} · ${GRADE_NAMES[Math.min(5, Math.max(1, Math.round(detail.average)))]}`
+            : undefined
+        }
+        icon={<span className="h-3 w-3 rounded-[3px]" style={{ backgroundColor: detail?.subject.colorHex }} />}
+        footer={
+          detail && (
+            <button type="button" onClick={() => { setDetailId(null); openCreate(detail.subject.id); }} className="btn-primary">
+              <Plus className="h-4 w-4" /> Note eintragen
+            </button>
+          )
+        }
+      >
+        {detail && (
+          <ul className="divide-y divide-line/10">
+            {detail.grades.map((g) => (
+              <li key={g.id} className="flex items-center gap-3 py-2">
+                <span
+                  className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px] font-mono text-[15px] font-bold ${
+                    g.kind === 'schularbeit' ? 'border-2 border-ink/50' : 'border border-line/15'
+                  } ${g.source === 'vmm' ? 'bg-inset' : ''} ${gradeColor(g.value)}`}
+                >
+                  {formatGrade(g.value, gradeDigits(g.value))}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-bold text-ink">{g.title ?? GRADE_KIND_LABELS[g.kind]}</span>
+                  <span className="block truncate text-[12px] text-ink-3">
+                    {GRADE_KIND_LABELS[g.kind]}
+                    {g.date && ` · ${format(new Date(g.date), 'd. MMM yyyy', { locale: de })}`}
+                    {g.weight !== 1 && ` · ×${g.weight}`}
+                    {g.source === 'vmm' && ' · View My Marks'}
+                  </span>
+                </span>
+                {g.source === 'app' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`Note ${formatGrade(g.value, gradeDigits(g.value))} (${GRADE_KIND_LABELS[g.kind]}) löschen?`)) onDelete(g.id);
+                    }}
+                    className="icon-btn h-8 w-8 text-ink-3 hover:text-pen"
+                    aria-label="Note löschen"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <span className="w-8 flex-shrink-0" />
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Modal>
 
       <Modal
         isOpen={isOpen}
@@ -354,20 +448,35 @@ export const GradesCard: React.FC<GradesCardProps> = ({
                 </button>
               ))}
             </div>
-            <p className="mt-1.5 text-[13px] text-ink-3">Zählt {DEFAULT_GRADE_WEIGHT[form.kind] === 2 ? 'doppelt' : DEFAULT_GRADE_WEIGHT[form.kind] === 0.5 ? 'halb' : 'einfach'}.</p>
+            <p className="mt-1.5 text-[13px] text-ink-3">
+              Zählt {DEFAULT_GRADE_WEIGHT[form.kind] === 2 ? 'doppelt' : DEFAULT_GRADE_WEIGHT[form.kind] === 0.5 ? 'halb' : 'einfach'}.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label htmlFor="grade-date" className="field-label">
                 Datum
               </label>
-              <input id="grade-date" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="field-input font-mono text-[14px]" />
+              <input
+                id="grade-date"
+                type="date"
+                value={form.date}
+                onChange={(e) => setForm({ ...form, date: e.target.value })}
+                className="field-input font-mono text-[14px]"
+              />
             </div>
             <div>
               <label htmlFor="grade-title" className="field-label">
                 Notiz
               </label>
-              <input id="grade-title" value={form.title} maxLength={120} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="optional" className="field-input" />
+              <input
+                id="grade-title"
+                value={form.title}
+                maxLength={120}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                placeholder="optional"
+                className="field-input"
+              />
             </div>
           </div>
         </form>

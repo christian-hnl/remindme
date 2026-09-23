@@ -37,7 +37,6 @@ import { ExamsCard, type ExamPayload } from './school/ExamsCard';
 import { StudyPlanCard } from './school/StudyPlanCard';
 import { linkVmmGroups } from '@/lib/school/vmm-link';
 import { bySubject, mergeGrades, toPlannerGrades } from '@/lib/school/grades';
-import { GradeStatsCard } from './school/GradeStatsCard';
 import { GradesCard, type GradePayload } from './school/GradesCard';
 import { ShoppingList } from './life/ShoppingList';
 import { HabitsCard } from './life/HabitsCard';
@@ -996,6 +995,16 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                   <ExamsCard
                     exams={data.exams}
                     subjects={data.subjects}
+                    plan={
+                      <StudyPlanCard
+                        embedded
+                        exams={data.exams}
+                        grades={plannerGrades}
+                        subjects={data.subjects}
+                        gradeSource={vmmLinks.length > 0 ? 'View My Marks' : null}
+                        onOpenExam={(exam) => scrollToExam(exam.id)}
+                      />
+                    }
                     createRequest={pending?.kind === 'exam'}
                     onCreateRequestHandled={clearPending}
                     onSave={handleSaveExam}
@@ -1007,9 +1016,6 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                     onDeleteTopic={handleDeleteExamTopic}
                   />
                 </Section>
-                <Section id="stats" className="order-7">
-                  <GradeStatsCard grades={mergedGrades} rows={gradeRows} subjects={data.subjects} />
-                </Section>
                 <Section id="timer" className="order-5">
                   <PomodoroTimer />
                 </Section>
@@ -1017,15 +1023,6 @@ function Dashboard({ initialData }: DashboardContainerProps) {
               </div>
               <div className="contents xl:col-span-8 xl:flex xl:flex-col xl:gap-6">
                 <Section id="tasks" className="order-1">{taskMatrix}</Section>
-                <Section id="plan" className="order-4">
-                  <StudyPlanCard
-                    exams={data.exams}
-                    grades={plannerGrades}
-                    subjects={data.subjects}
-                    gradeSource={vmmLinks.length > 0 ? 'View My Marks' : null}
-                    onOpenExam={(exam) => scrollToExam(exam.id)}
-                  />
-                </Section>
                 <Section id="timetable" className="order-6">{timetable}</Section>
                 <Section id="grades" className="order-5">
                   <GradesCard

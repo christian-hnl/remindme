@@ -14,6 +14,8 @@ interface StudyPlanCardProps {
   subjects: Subject[];
   /** Where the grades came from, e.g. "View My Marks". */
   gradeSource?: string | null;
+  /** Rendered inside the exams card – no card frame and no heading of its own. */
+  embedded?: boolean;
   onOpenExam: (exam: Exam) => void;
 }
 
@@ -86,50 +88,78 @@ function PlanRow({ entry, rank, onOpen }: { entry: ExamPlanEntry; rank: number; 
 }
 
 /** Answers the two questions before a test: what do I need, and what do I start with? */
-export function StudyPlanCard({ exams, grades, subjects, gradeSource, onOpenExam }: StudyPlanCardProps) {
+export function StudyPlanCard({ exams, grades, subjects, gradeSource, embedded, onOpenExam }: StudyPlanCardProps) {
   const plan = useMemo(() => buildExamPlan(exams, grades, subjects), [exams, grades, subjects]);
   const weeks = useMemo(() => groupByWeek(plan), [plan]);
   const [view, setView] = useState<'priority' | 'weeks'>('priority');
 
+  const emptyNote = (
+    <p className="text-[14px] text-ink-2">
+      Keine Prüfungen in den nächsten Wochen. Sobald welche aus WebUntis kommen oder du sie einträgst, rechne ich dir hier aus, was du brauchst.
+    </p>
+  );
+
   if (plan.length === 0) {
+    if (embedded) return <div className="py-4">{emptyNote}</div>;
     return (
       <section className="card" aria-label="Lernplan">
         <div className="p-4 pb-2 sm:p-5 sm:pb-2">
           <p className="eyebrow">Schule</p>
           <h2 className="card-title mt-1">Lernplan</h2>
         </div>
-        <p className="px-5 pb-5 text-[14px] text-ink-2">
-          Keine Prüfungen in den nächsten Wochen. Sobald welche aus WebUntis kommen oder du sie einträgst, rechne ich dir hier aus, was du brauchst.
-        </p>
+        <div className="px-5 pb-5">{emptyNote}</div>
       </section>
     );
   }
 
   const crowded = weeks.filter((w) => w.entries.length > 1);
 
-  return (
-    <section className="card" aria-label="Lernplan">
-      <div className="flex flex-wrap items-start justify-between gap-3 p-4 pb-3 sm:p-5 sm:pb-3">
-        <div className="min-w-0">
-          <p className="eyebrow">Schule</p>
-          <h2 className="card-title mt-1">Lernplan</h2>
-          <p className="mt-1 text-[13px] text-ink-3">
-            {plan.length} {plan.length === 1 ? 'Prüfung' : 'Prüfungen'} in den nächsten Wochen
-            {crowded.length > 0 && ` · ${crowded.length} volle ${crowded.length === 1 ? 'Woche' : 'Wochen'}`}
-            {gradeSource && ` · Noten aus ${gradeSource}`}
-          </p>
-        </div>
-        <div className="segmented grid-cols-2" role="group" aria-label="Ansicht">
-          <button type="button" aria-pressed={view === 'priority'} onClick={() => setView('priority')} className="segmented-item px-3">
-            <Flag className="h-4 w-4" /> Reihenfolge
-          </button>
-          <button type="button" aria-pressed={view === 'weeks'} onClick={() => setView('weeks')} className="segmented-item px-3">
-            Wochen
-          </button>
-        </div>
-      </div>
+  const summary = (
+    <>
+      {plan.length} {plan.length === 1 ? 'Prüfung' : 'Prüfungen'} in den nächsten Wochen
+      {crowded.length > 0 && ` · ${crowded.length} volle ${crowded.length === 1 ? 'Woche' : 'Wochen'}`}
+      {gradeSource && ` · Noten aus ${gradeSource}`}
+    </>
+  );
 
-      <div className="px-4 pb-4 sm:px-5">
+  const switcher = (
+    <div className="segmented grid-cols-2 sm:inline-grid" role="group" aria-label="Ansicht">
+      <button type="button" aria-pressed={view === 'priority'} onClick={() => setView('priority')} className="segmented-item px-3">
+        <Flag className="h-4 w-4" /> Reihenfolge
+      </button>
+      <button type="button" aria-pressed={view === 'weeks'} onClick={() => setView('weeks')} className="segmented-item px-3">
+        Wochen
+      </button>
+    </div>
+  );
+
+  const Frame = embedded
+    ? ({ children }: { children: React.ReactNode }) => (
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
+            <p className="text-[13px] text-ink-3">{summary}</p>
+            {switcher}
+          </div>
+          {children}
+        </div>
+      )
+    : ({ children }: { children: React.ReactNode }) => (
+        <section className="card" aria-label="Lernplan">
+          <div className="flex flex-wrap items-start justify-between gap-3 p-4 pb-3 sm:p-5 sm:pb-3">
+            <div className="min-w-0">
+              <p className="eyebrow">Schule</p>
+              <h2 className="card-title mt-1">Lernplan</h2>
+              <p className="mt-1 text-[13px] text-ink-3">{summary}</p>
+            </div>
+            {switcher}
+          </div>
+          <div className="px-4 pb-4 sm:px-5">{children}</div>
+        </section>
+      );
+
+  return (
+    <Frame>
+      <>
         {view === 'priority' ? (
           <ul className="divide-y divide-line/10">
             {plan.map((entry, i) => (
@@ -174,7 +204,7 @@ export function StudyPlanCard({ exams, grades, subjects, gradeSource, onOpenExam
             })}
           </div>
         )}
-      </div>
-    </section>
+      </>
+    </Frame>
   );
 }

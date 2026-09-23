@@ -12,7 +12,6 @@ import {
   ShoppingCart,
   Sparkles,
   Timer,
-  TrendingUp,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
@@ -43,9 +42,7 @@ export const MODE_SECTIONS: Partial<Record<WorkspaceMode, SectionMeta[]>> = {
     { id: 'tasks', label: 'Hausübungen', Icon: ClipboardList },
     { id: 'timetable', label: 'Stundenplan', Icon: CalendarRange },
     { id: 'grades', label: 'Noten', Icon: Award },
-    { id: 'stats', label: 'Statistik', Icon: TrendingUp },
     { id: 'exams', label: 'Prüfungen', Icon: GraduationCap },
-    { id: 'plan', label: 'Lernplan', Icon: Sparkles },
     { id: 'timer', label: 'Timer', Icon: Timer },
     { id: 'calendar', label: 'Kalender', Icon: CalendarDays },
   ],
