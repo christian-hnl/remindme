@@ -1,7 +1,9 @@
+import type { NutritionToday } from '@/lib/nutrition/views';
+
 export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskStatus = 'backlog' | 'in_progress' | 'done' | 'archived';
 export type TransactionType = 'income' | 'expense' | 'transfer_to_pot' | 'transfer_from_pot' | 'transfer' | 'investment';
-export type WorkspaceMode = 'all' | 'study' | 'life' | 'wealth' | 'skills' | 'bible' | 'notes';
+export type WorkspaceMode = 'all' | 'study' | 'life' | 'nutrition' | 'wealth' | 'skills' | 'bible' | 'notes';
 export type RepeatPattern = 'none' | 'daily' | 'weekly';
 export type BankSource = 'enablebanking' | 'george' | 'traderepublic' | 'finanzguru' | 'file';
 export type ExamKind = 'schularbeit' | 'test' | 'pruefung' | 'referat' | 'sonstiges';
@@ -66,6 +68,10 @@ export interface Reminder {
   icon: string;
   priority: 'low' | 'medium' | 'high';
   repeatPattern: RepeatPattern;
+  /** In-app target such as "nutrition:shopping" – the list offers an "Öffnen" button. */
+  link?: string | null;
+  /** Set when a module keeps the reminder in sync by itself. */
+  sourceKey?: string | null;
   createdAt?: string;
 }
 
@@ -449,6 +455,8 @@ export interface Skill {
   totalMinutes: number;
 }
 
+export type { NutritionToday };
+
 export interface DashboardSummary {
   user: {
     id: string;
@@ -501,4 +509,6 @@ export interface DashboardSummary {
   };
   /** Token for the protected iCal feed, null when the app runs without APP_PASSWORD. */
   icalToken: string | null;
+  /** "Essen heute" – null until the Ernährung mode was opened once. */
+  nutrition: NutritionToday | null;
 }

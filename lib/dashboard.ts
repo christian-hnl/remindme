@@ -6,6 +6,8 @@ import { getIcalToken } from '@/lib/auth';
 import type { DashboardSummary } from '@/types';
 import { loadSkills } from '@/lib/skills-db';
 import { toSafeVmmConfigWithGroups } from '@/lib/vmm';
+import { ensureNutritionReminders } from '@/lib/nutrition/server/reminders';
+import { getNutritionToday } from '@/lib/nutrition/server/summary';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -20,6 +22,9 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const remainingDays = daysInMonth - now.getDate() + 1;
+
+  // Meal reminders follow the plan and the timetable – refresh them before reading reminders.
+  await ensureNutritionReminders(userId).catch((error) => console.error('Nutrition reminders:', error));
 
   const [
     tasks,
@@ -45,6 +50,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     skills,
     bibleBookmarks,
     vmmConfig,
+    nutrition,
   ] = await Promise.all([
     db.task.findMany({
       where: { userId, status: { not: 'archived' } },
@@ -113,6 +119,10 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
     loadSkills(userId),
     db.bibleBookmark.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } }),
     db.vmmConfig.findUnique({ where: { userId }, include: { groups: { orderBy: { name: 'asc' } } } }),
+    getNutritionToday(userId).catch((error) => {
+      console.error('Nutrition today:', error);
+      return null;
+    }),
   ]);
 
   // Accounts with a bank-reported balance use it; imported accounts sum their bookings.
@@ -230,7 +240,8 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       urgentTasksCount,
       overdueTasksCount,
       todaysStudyMinutes,
-      pendingRemindersCount: reminders.filter((r) => !r.isDone).length,
+      // Meal reminders planned beyond tomorrow wait in the calendar feed, not in the count.
+      pendingRemindersCount: reminders.filter((r) => !r.isDone && !(r.sourceKey && r.dueDate && r.dueDate.getTime() >= todayStart.getTime() + 2 * 86_400_000)).length,
       notesCount: notes.length,
     },
     tasks,
@@ -265,6 +276,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       })),
     },
     icalToken: getIcalToken(),
+    nutrition,
   };
 
   // Dates → ISO strings, so server component props and API responses share one shape.

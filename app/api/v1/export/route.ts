@@ -30,6 +30,13 @@ export async function GET() {
       db.categoryBudget.findMany({ where }),
       db.categoryRule.findMany({ where }),
     ]);
+    const [nutritionSettings, recipes, mealWeeks, mealLogs, bodyMetrics] = await Promise.all([
+      db.nutritionSettings.findUnique({ where }),
+      db.recipe.findMany({ where, include: { ingredients: { include: { ingredient: { select: { slug: true } } } } } }),
+      db.mealWeek.findMany({ where, include: { entries: true } }),
+      db.mealLog.findMany({ where, orderBy: { day: 'desc' } }),
+      db.bodyMetric.findMany({ where, orderBy: { day: 'desc' } }),
+    ]);
 
     const stamp = new Date().toISOString().slice(0, 10);
     return NextResponse.json(
@@ -58,6 +65,7 @@ export async function GET() {
         categoryBudgets,
         categoryRules,
         untisConfig: toSafeUntisConfig(untisConfig),
+        nutrition: { settings: nutritionSettings, recipes, weeks: mealWeeks, logs: mealLogs, body: bodyMetrics },
       },
       { headers: { 'Content-Disposition': `attachment; filename="lifetracker-backup-${stamp}.json"` } }
     );

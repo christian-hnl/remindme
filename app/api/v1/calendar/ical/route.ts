@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { getCurrentUser } from '@/lib/user';
 import { getIcalToken } from '@/lib/auth';
 import { serverError } from '@/lib/api';
+import { nutritionCalendar } from '@/lib/nutrition/server/calendar';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,13 +82,14 @@ export async function GET(req: Request) {
 
   try {
     const user = await getCurrentUser();
-    const [tasks, blocks, reminders] = await Promise.all([
+    const [tasks, blocks, reminders, prepSessions] = await Promise.all([
       db.task.findMany({
         where: { userId: user.id, status: { notIn: ['done', 'archived'] } },
         include: { subject: true, scheduleBlock: true },
       }),
       db.scheduleBlock.findMany({ where: { userId: user.id } }),
       db.reminder.findMany({ where: { userId: user.id, hasDueDate: true, isDone: false, dueDate: { not: null } } }),
+      nutritionCalendar(user.id),
     ]);
 
     const now = new Date();
@@ -159,6 +161,9 @@ export async function GET(req: Request) {
 
     // Reminders: timed (15 min) or all-day, optionally repeating.
     for (const r of reminders) {
+      // Prep sessions come as their own events below, with the real duration.
+      if (r.sourceKey?.startsWith('nutrition:prep:') || r.sourceKey?.startsWith('nutrition:midweek:')) continue;
+      const nutrition = r.category === 'Ernährung';
       const date = berlinDate(r.dueDate!);
       const prefix = r.personName ? `🗣️ An ${r.personName}: ` : '🔔 ';
       const timing = r.dueTime
@@ -182,13 +187,35 @@ export async function GET(req: Request) {
         ...(r.repeatPattern === 'daily' || r.repeatPattern === 'weekly'
           ? [`RRULE:FREQ=${r.repeatPattern === 'daily' ? 'DAILY' : 'WEEKLY'}`]
           : []),
-        `SUMMARY:${esc(prefix + r.title)}`,
+        `SUMMARY:${esc((nutrition ? '🥗 ' : prefix) + r.title)}`,
         `DESCRIPTION:${esc(`Kategorie: ${r.category}`)}`,
-        'CATEGORIES:Erinnerungen',
+        `CATEGORIES:${nutrition ? 'Ernährung' : 'Erinnerungen'}`,
         'BEGIN:VALARM',
         'ACTION:DISPLAY',
         `DESCRIPTION:${esc(`Erinnerung: ${r.title}`)}`,
-        'TRIGGER:-PT15M',
+        // Meal reminders are timed to the minute (pre-workout, check-in) – alarm right then.
+        `TRIGGER:${nutrition ? 'PT0M' : '-PT15M'}`,
+        'END:VALARM',
+        'END:VEVENT'
+      );
+    }
+
+    // Meal prep sessions: blocked for their real duration, alarm at the start.
+    for (const p of prepSessions) {
+      const date = berlinDate(p.date);
+      lines.push(
+        'BEGIN:VEVENT',
+        `UID:mealprep-${p.key}@lifetracker.app`,
+        dtstamp,
+        `DTSTART;TZID=${TZID}:${localStamp(date, p.start)}`,
+        `DTEND;TZID=${TZID}:${localStamp(date, p.end)}`,
+        `SUMMARY:${esc(`🥡 ${p.title}`)}`,
+        `DESCRIPTION:${esc(p.description)}`,
+        'CATEGORIES:Ernährung',
+        'BEGIN:VALARM',
+        'ACTION:DISPLAY',
+        `DESCRIPTION:${esc(`${p.title} – jetzt starten`)}`,
+        'TRIGGER:PT0M',
         'END:VALARM',
         'END:VEVENT'
       );

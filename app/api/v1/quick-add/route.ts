@@ -4,6 +4,9 @@ import { getCurrentUser } from '@/lib/user';
 import { createTask } from '@/lib/tasks';
 import { parseNaturalLanguage } from '@/lib/nlp-parser';
 import { jsonError, readJson, serverError } from '@/lib/api';
+import { quickLogMeal } from '@/lib/nutrition/server/quick';
+import { LogError } from '@/lib/nutrition/server/logs';
+import { invalidateNutritionReminders } from '@/lib/nutrition/server/reminders';
 
 const PRIORITY_LABELS: Record<string, string> = { urgent: 'Prio 1', high: 'Prio 2', medium: 'Prio 3', low: 'Prio 4' };
 
@@ -30,6 +33,12 @@ export async function POST(req: Request) {
         message: `Aufgabe „${task.title}“ angelegt (${task.estimatedMinutes} min, ${PRIORITY_LABELS[task.priority]})`,
         data: task,
       });
+    }
+
+    if (intent.type === 'meal') {
+      const result = await quickLogMeal(user.id, intent);
+      await invalidateNutritionReminders(user.id);
+      return NextResponse.json({ type: 'meal', message: result.message, data: result });
     }
 
     if (intent.type === 'transaction') {
@@ -87,6 +96,7 @@ export async function POST(req: Request) {
       data: { pot, transaction: tx },
     });
   } catch (error) {
+    if (error instanceof LogError) return jsonError(error.message, 404);
     return serverError('POST /quick-add', error);
   }
 }

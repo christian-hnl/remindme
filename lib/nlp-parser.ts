@@ -24,7 +24,21 @@ export interface ParsedDeposit {
   potName: string;
 }
 
-export type ParsedIntent = ParsedTask | ParsedTransaction | ParsedDeposit;
+export type MealSlotName = 'breakfast' | 'snack' | 'lunch' | 'afternoon' | 'dinner';
+
+export interface ParsedMeal {
+  type: 'meal';
+  /** Dish to look up among the recipes, e.g. "Chicken Teriyaki Bowl". */
+  recipeQuery?: string;
+  /** Planned meal named in the text ("Frühstück gegessen"). */
+  slot?: MealSlotName;
+  /** What goes into the log when no recipe matches, e.g. "Snack". */
+  label: string;
+  protein?: number;
+  kcal?: number;
+}
+
+export type ParsedIntent = ParsedTask | ParsedTransaction | ParsedDeposit | ParsedMeal;
 
 // Unicode regexes are built with the RegExp constructor: TypeScript rejects `u`-flag
 // literals in this project setup, and `\p{L}` is needed so umlauts count as letters.
@@ -87,7 +101,56 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export function parseNaturalLanguage(input: string, now: Date = new Date()): ParsedIntent | null {
   const text = input.trim().replace(/\s+/g, ' ');
   if (!text) return null;
-  return parseMoney(text) ?? parseTask(text, now);
+  return parseMoney(text) ?? parseMeal(text) ?? parseTask(text, now);
+}
+
+const MEAL_SLOT_WORDS: [string, MealSlotName][] = [
+  ['frühstück', 'breakfast'],
+  ['jause', 'snack'],
+  ['mittagessen|mittag', 'lunch'],
+  ['pre-?workout|nachmittagssnack', 'afternoon'],
+  ['abendessen|abend', 'dinner'],
+];
+const ATE = 'gegessen|gefuttert|verputzt';
+const PROTEIN = re(String.raw`(?<![\d.,])(\d+(?:[.,]\d+)?)\s*g\s*(?:protein|eiweiß|eiweiss)(?![\p{L}])`);
+const KCAL = re(String.raw`(?<![\d.,])(\d{2,4})\s*kcal(?![\p{L}])`);
+
+/**
+ * Meal log for the Ernährung mode: "gegessen: Chicken Teriyaki Bowl", "Frühstück gegessen",
+ * "Snack 30g Protein", "Shake 25 g Eiweiß 180 kcal".
+ */
+function parseMeal(text: string): ParsedMeal | null {
+  const protein = text.match(PROTEIN);
+  const kcal = text.match(KCAL);
+  const ate = word(ATE).test(text);
+  if (!protein && !kcal && !ate) return null;
+
+  let rest = text;
+  if (protein) rest = rest.replace(protein[0], ' ');
+  if (kcal) rest = rest.replace(kcal[0], ' ');
+  rest = rest.replace(word(String.raw`(?:ich\s+)?(?:hab|habe)`, 'giu'), ' ').replace(word(ATE, 'giu'), ' ').replace(/[:–-]\s/g, ' ');
+
+  let slot: MealSlotName | undefined;
+  for (const [pattern, name] of MEAL_SLOT_WORDS) {
+    const m = rest.match(word(pattern));
+    if (!m) continue;
+    slot = name;
+    rest = rest.replace(m[0], ' ');
+    break;
+  }
+  const name = tidy(rest.replace(word('als|zum|zu|beim', 'giu'), ' '));
+
+  if (protein || kcal) {
+    return {
+      type: 'meal',
+      slot,
+      label: name ? capitalize(name) : 'Snack',
+      protein: protein ? parseFloat(protein[1].replace(',', '.')) : undefined,
+      kcal: kcal ? parseInt(kcal[1], 10) : undefined,
+    };
+  }
+  if (!name && !slot) return null;
+  return { type: 'meal', slot, recipeQuery: name || undefined, label: name ? capitalize(name) : 'Mahlzeit' };
 }
 
 function parseMoney(text: string): ParsedTransaction | ParsedDeposit | null {
