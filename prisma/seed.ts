@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { seedNutritionCatalog } from '../lib/nutrition/server/catalog';
 
 const prisma = new PrismaClient();
 
@@ -306,6 +307,9 @@ async function main() {
       },
     ],
   });
+
+  // Recipes and rotation weeks for the Ernährung mode.
+  await seedNutritionCatalog(prisma);
 
   console.log('✅ Seeding completed successfully!');
 }

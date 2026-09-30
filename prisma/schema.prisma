@@ -37,6 +37,11 @@ model User {
   skills          Skill[]
   bibleBookmarks  BibleBookmark[]
   vmmConfig       VmmConfig?
+  nutrition       NutritionSettings?
+  recipes         Recipe[]
+  mealWeeks       MealWeek[]
+  mealLogs        MealLog[]
+  bodyMetrics     BodyMetric[]
 }
 
 model WebUntisConfig {
@@ -282,6 +287,8 @@ model ShoppingItem {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
   quantity  String?
+  /// Set when the meal plan put it there (e.g. "nutrition:2026-10-05"), so a new export can tidy up.
+  sourceKey String?
   isDone    Boolean   @default(false)
   doneAt    DateTime?
   createdAt DateTime  @default(now())
@@ -294,8 +301,12 @@ model Habit {
   name      String
   emoji     String     @default("✅")
   archived  Boolean    @default(false)
+  /// Set for routines another module ticks off by itself (e.g. "nutrition:prep").
+  key       String?
   createdAt DateTime   @default(now())
   logs      HabitLog[]
+
+  @@unique([userId, key])
 }
 
 model HabitLog {
@@ -439,7 +450,13 @@ model Reminder {
   icon          String    @default("bell")
   priority      String    @default("medium")
   repeatPattern String    @default("none")
+  /// In-app target, e.g. "nutrition:shopping" – the reminder list shows an "Öffnen" button.
+  link          String?
+  /// Set for reminders a module keeps in sync by itself (e.g. "nutrition:prep:2026-10-04").
+  sourceKey     String?
   createdAt     DateTime  @default(now())
+
+  @@unique([userId, sourceKey])
 }
 
 model Note {
@@ -506,4 +523,224 @@ model UserWidget {
   config         String   @default("{}")
   isVisible      Boolean  @default(true)
   createdAt      DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Ernährung / Meal Prep
+// ---------------------------------------------------------------------------
+
+/// Food with nutrition per 100 g and an estimated Hofer/Lidl price. Shared by all users.
+model Ingredient {
+  id         String             @id @default(uuid())
+  slug       String             @unique
+  name       String
+  /// Store department, groups the shopping list.
+  department String
+  kcal       Float
+  protein    Float
+  carbs      Float
+  fat        Float
+  pricePerKg Float
+  packGrams  Float
+  packLabel  String
+  pieceGrams Float?
+  pieceLabel String?
+  /// Lasts for weeks (oil, spices, honey) – checked, not bought every week.
+  pantry     Boolean            @default(false)
+  recipes    RecipeIngredient[]
+}
+
+/// Built-in recipes carry a slug (the seed upserts by it); the user's own have a userId.
+model Recipe {
+  id              String                  @id @default(uuid())
+  slug            String?                 @unique
+  userId          String?
+  user            User?                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  /// breakfast | snack | main | preworkout | sauce
+  mealType        String
+  description     String                  @default("")
+  flavorHack      String                  @default("")
+  servings        Int                     @default(1)
+  prepMinutes     Int                     @default(0)
+  cookMinutes     Int                     @default(0)
+  fridgeDays      Int                     @default(3)
+  /// 0 = does not freeze well.
+  freezerDays     Int                     @default(0)
+  eatCold         Boolean                 @default(false)
+  /// JSON string arrays
+  tags            String                  @default("[]")
+  equipment       String                  @default("[]")
+  steps           String                  @default("[]")
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+  ingredients     RecipeIngredient[]
+  templateEntries MealPlanTemplateEntry[] @relation("TemplateRecipe")
+  templateSauces  MealPlanTemplateEntry[] @relation("TemplateSauce")
+  weekEntries     MealWeekEntry[]         @relation("WeekRecipe")
+  weekSauces      MealWeekEntry[]         @relation("WeekSauce")
+}
+
+model RecipeIngredient {
+  id           String     @id @default(uuid())
+  recipeId     String
+  recipe       Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  /// Grams for the whole recipe (all servings).
+  grams        Float
+  note         String?
+  position     Int        @default(0)
+}
+
+/// One of the rotation weeks (Woche 1–4) the plan is built from.
+model MealPlanTemplate {
+  id          String                  @id @default(uuid())
+  slug        String                  @unique
+  number      Int
+  name        String
+  theme       String
+  sauceBase   String
+  /// midweek = mini prep on Wednesday, freeze = Thu/Fri portions go into the freezer
+  strategy    String
+  description String
+  /// JSON array of prep steps (see lib/nutrition/catalog/templates.ts)
+  prepSteps   String                  @default("[]")
+  /// Fingerprint of the catalog in code when it was seeded – a change triggers a re-seed.
+  catalogVersion String                @default("")
+  entries     MealPlanTemplateEntry[]
+  weeks       MealWeek[]
+}
+
+model MealPlanTemplateEntry {
+  id         String           @id @default(uuid())
+  templateId String
+  template   MealPlanTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  /// ISO weekday, 1 = Monday
+  day        Int
+  slot       String
+  /// Only for the afternoon slot: training | rest
+  variant    String?
+  recipeId   String
+  recipe     Recipe           @relation("TemplateRecipe", fields: [recipeId], references: [id], onDelete: Cascade)
+  sauceId    String?
+  sauce      Recipe?          @relation("TemplateSauce", fields: [sauceId], references: [id], onDelete: SetNull)
+}
+
+/// The user's plan for one week (Monday = weekStart), copied from a rotation week and then adjusted.
+model MealWeek {
+  id         String            @id @default(uuid())
+  userId     String
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Monday, yyyy-MM-dd
+  weekStart  String
+  templateId String?
+  template   MealPlanTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  /// JSON array of prep step ids already done
+  prepChecks String            @default("[]")
+  /// "Einfach"-Woche: lunch and dinner are plain dishes (Huhn mit Reis & Co.) – shopping and prep follow.
+  simple     Boolean           @default(false)
+  /// Set once the week's shopping list went into the Einkaufsliste.
+  exportedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  entries    MealWeekEntry[]
+
+  @@unique([userId, weekStart])
+}
+
+model MealWeekEntry {
+  id          String   @id @default(uuid())
+  weekId      String
+  week        MealWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  day         Int
+  slot        String
+  recipeId    String
+  recipe      Recipe   @relation("WeekRecipe", fields: [recipeId], references: [id], onDelete: Cascade)
+  sauceId     String?
+  sauce       Recipe?  @relation("WeekSauce", fields: [sauceId], references: [id], onDelete: SetNull)
+  servings    Float    @default(1)
+  /// Chosen by the user – plan adaptation leaves it alone.
+  isSwapped   Boolean  @default(false)
+  /// Recipe id this replaced automatically (dislike, equipment, no microwave).
+  adaptedFrom String?
+
+  @@unique([weekId, day, slot])
+}
+
+/// A meal ticked off: eaten as planned, swapped for something else, or skipped.
+/// Macros are copied at logging time, so later recipe edits don't rewrite history.
+model MealLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Local calendar day, yyyy-MM-dd
+  day       String
+  /// breakfast | snack | lunch | afternoon | dinner | extra
+  slot      String
+  /// eaten | swapped | skipped
+  status    String
+  recipeId  String?
+  label     String
+  kcal      Float    @default(0)
+  protein   Float    @default(0)
+  carbs     Float    @default(0)
+  fat       Float    @default(0)
+  cost      Float    @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([userId, day])
+}
+
+model NutritionSettings {
+  id                String    @id @default(uuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kcalTarget        Int       @default(2200)
+  kcalTolerance     Int       @default(100)
+  proteinMin        Int       @default(150)
+  proteinMax        Int       @default(165)
+  fatMin            Int       @default(60)
+  fatMax            Int       @default(75)
+  weeklyBudget      Float     @default(70)
+  /// hofer-lidl | billa-spar | bio-markt
+  store             String    @default("hofer-lidl")
+  /// Weekend meals on the shopping list and in the budget (off = eaten at home with the family).
+  shopWeekend       Boolean   @default(true)
+  hasMicrowave      Boolean   @default(false)
+  /// JSON: equipment and dislikes as string arrays, trainingDays as weekday → upper|lower|rest,
+  /// reminders as kind → on/off, favorites as recipe ids. Defaults live in lib/nutrition/settings.ts.
+  equipment         String    @default("[]")
+  dislikes          String    @default("[]")
+  trainingDays      String    @default("{}")
+  trainingTime      String    @default("16:00")
+  trainingMinutes   Int       @default(75)
+  commuteMinutes    Int       @default(30)
+  weekendBreakfast  String    @default("08:30")
+  prepStartTime     String    @default("15:00")
+  eveningTime       String    @default("20:00")
+  checkInTime       String    @default("20:30")
+  reminders         String    @default("{}")
+  favorites         String    @default("[]")
+  /// Meal prep start – food spending before it is the comparison baseline.
+  startedAt         DateTime  @default(now())
+  remindersSyncedAt DateTime?
+  /// The two nutrition routines were added to Routinen once (deleting them later sticks).
+  habitsSetup       Boolean   @default(false)
+  /// weekStart of the last week whose goal was celebrated, so the confetti fires once.
+  celebratedWeek    String?
+  updatedAt         DateTime  @updatedAt
+}
+
+/// Weekly body check-in for the recomposition trend.
+model BodyMetric {
+  id       String @id @default(uuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// yyyy-MM-dd
+  day      String
+  weightKg Float?
+  waistCm  Float?
+
+  @@unique([userId, day])
 }
