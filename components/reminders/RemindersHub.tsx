@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import type { Reminder, RepeatPattern } from '@/types';
-import { Bell, ChevronDown, Plus, Repeat, Trash2, User } from 'lucide-react';
+import { ArrowRight, Bell, ChevronDown, Plus, Repeat, Trash2, User } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { CheckButton } from '@/components/ui/CheckButton';
 import { fromDateInput, relativeDayLabel, toDateInput } from '@/lib/format';
@@ -16,6 +16,8 @@ interface RemindersHubProps {
   /** Opens the "new reminder" form, e.g. from the global "Neu" menu. */
   createRequest?: boolean;
   onCreateRequestHandled?: () => void;
+  /** Follows a reminder's in-app link, e.g. "nutrition:shopping". */
+  onOpenLink?: (link: string) => void;
 }
 
 type Filter = 'all' | 'dated' | 'someday' | 'people';
@@ -31,7 +33,7 @@ interface FormState {
   repeatPattern: RepeatPattern;
 }
 
-const CATEGORIES = ['Haushalt', 'Erledigung', 'Gesundheit', 'Schule', 'Person', 'Sonstiges'];
+const CATEGORIES = ['Haushalt', 'Erledigung', 'Gesundheit', 'Schule', 'Ernährung', 'Person', 'Sonstiges'];
 
 const emptyForm = (title = ''): FormState => ({
   title,
@@ -73,6 +75,7 @@ export const RemindersHub: React.FC<RemindersHubProps> = ({
   onSaveReminder,
   createRequest,
   onCreateRequestHandled,
+  onOpenLink,
 }) => {
   const [filter, setFilter] = useState<Filter>('all');
   const [quickTitle, setQuickTitle] = useState('');
@@ -154,8 +157,15 @@ export const RemindersHub: React.FC<RemindersHubProps> = ({
   };
 
   const activeFilter = FILTERS.find((f) => f.id === filter)!;
+  // Reminders a module plans ahead (meal prep) only show up from the day before –
+  // the rest waits in the calendar feed, so the list doesn't fill with next week.
+  const horizon = new Date();
+  horizon.setHours(0, 0, 0, 0);
+  horizon.setDate(horizon.getDate() + 2);
+  const isLater = (r: Reminder) => !!r.sourceKey && !!r.dueDate && new Date(r.dueDate) >= horizon;
+  const later = reminders.filter((r) => !r.isDone && isLater(r)).length;
   const active = reminders
-    .filter((r) => !r.isDone && activeFilter.match(r))
+    .filter((r) => !r.isDone && !isLater(r) && activeFilter.match(r))
     .sort((a, b) => {
       const da = dueInfo(a);
       const db = dueInfo(b);
@@ -164,7 +174,7 @@ export const RemindersHub: React.FC<RemindersHubProps> = ({
       return new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime();
     });
   const done = reminders.filter((r) => r.isDone && activeFilter.match(r));
-  const openCount = reminders.filter((r) => !r.isDone).length;
+  const openCount = reminders.filter((r) => !r.isDone && !isLater(r)).length;
 
   return (
     <section className="card" aria-label="Erinnerungen">
@@ -233,8 +243,14 @@ export const RemindersHub: React.FC<RemindersHubProps> = ({
                         </span>
                       )}
                       {r.priority === 'high' && <span className="font-bold text-warn">wichtig</span>}
+                      {r.category === 'Ernährung' && <span className="text-ink-3">Ernährung</span>}
                     </span>
                   </button>
+                  {r.link && onOpenLink && (
+                    <button type="button" onClick={() => onOpenLink(r.link!)} className="btn-secondary h-9 flex-shrink-0 px-2.5 text-[13px]" aria-label={`${r.title} öffnen`}>
+                      Öffnen <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => onDeleteReminder(r.id)}
@@ -248,6 +264,8 @@ export const RemindersHub: React.FC<RemindersHubProps> = ({
             })}
           </ul>
         )}
+
+        {later > 0 && <p className="pb-2 text-[12px] text-ink-3">+ {later} geplante Ernährungs-Erinnerungen ab übermorgen – im Kalender-Abo mit Alarm.</p>}
 
         {done.length > 0 && (
           <div className="border-t border-line/10 py-2">

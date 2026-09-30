@@ -54,6 +54,9 @@ import { SkillsHub } from './skills/SkillsHub';
 import { BibleHub } from './bible/BibleHub';
 import { DailyVerseCard } from './bible/DailyVerseCard';
 import { WelcomeCard } from './onboarding/WelcomeCard';
+import { NutritionHub } from './nutrition/NutritionHub';
+import { MealsTodayCard } from './nutrition/MealsTodayCard';
+import { nutritionLink } from './nutrition/shared';
 import { PotDetailsModal } from './wealth/PotDetailsModal';
 import { CreatePotModal } from './wealth/CreatePotModal';
 import { AddTransactionModal } from './wealth/AddTransactionModal';
@@ -64,7 +67,7 @@ import { NotesHub } from './notes/NotesHub';
 import { SettingsModal, type SettingsTab } from './settings/SettingsModal';
 import { ToastProvider, useToast } from './ui/Toast';
 import { QuickCreateSheet, type QuickKind } from './ui/QuickCreateSheet';
-import { BarChart3, Bell, GraduationCap, LayoutGrid, ListOrdered, PiggyBank, Plus, Upload } from 'lucide-react';
+import { BarChart3, Bell, ChefHat, GraduationCap, LayoutGrid, ListOrdered, PiggyBank, Plus, Settings2, Upload } from 'lucide-react';
 import { fireMilestoneGlow } from '@/lib/confetti';
 import { api, errorMessage } from '@/lib/client';
 import { formatEuro, relativeDayLabel } from '@/lib/format';
@@ -79,7 +82,7 @@ const BANK_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type TaskModalState = { task: Task | null; subjectId: string | null } | null;
 /** A form that should open once its view is on screen (from the "Neu" menu). */
-type PendingRequest = { kind: 'reminder' | 'exam' | 'grade' | 'shopping' | 'birthday' | 'skill' | 'note'; prefill?: Partial<GradePayload> } | null;
+type PendingRequest = { kind: 'reminder' | 'exam' | 'grade' | 'shopping' | 'birthday' | 'skill' | 'note' | 'recipe'; prefill?: Partial<GradePayload> } | null;
 type WealthView = 'overview' | 'analysis' | 'transactions';
 const WEALTH_VIEW_KEY = 'lifetracker:wealth-view';
 
@@ -165,6 +168,8 @@ function Dashboard({ initialData }: DashboardContainerProps) {
 
   // One card at a time – the dock and the section tabs both drive this.
   const focus = useFocusState(activeMode);
+  /** A card to focus once its mode is on screen (switching modes clears the focus first). */
+  const [pendingSection, setPendingSection] = useState<{ mode: WorkspaceMode; id: string } | null>(null);
 
   // ---------------------------------------------------------------- mode
   const setActiveMode = useCallback((mode: WorkspaceMode) => {
@@ -213,6 +218,33 @@ function Dashboard({ initialData }: DashboardContainerProps) {
       setWealthView('transactions');
     },
     [setActiveMode, setWealthView]
+  );
+
+  useEffect(() => {
+    if (!pendingSection || pendingSection.mode !== activeMode) return;
+    focus.open(pendingSection.id);
+    setPendingSection(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSection, activeMode]);
+
+  /** Opens a mode with one card focused – from reminders, the palette or another card. */
+  const openSection = useCallback(
+    (mode: WorkspaceMode, id: string) => {
+      if (mode === activeMode) focus.open(id);
+      else {
+        setActiveMode(mode);
+        setPendingSection({ mode, id });
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [activeMode, focus, setActiveMode]
+  );
+
+  const openReminderLink = useCallback(
+    (link: string) => {
+      if (link.startsWith('nutrition:')) openSection('nutrition', nutritionLink(link) ?? 'today');
+    },
+    [openSection]
   );
 
   const openSettings = useCallback((tab: SettingsTab = 'profile') => {
@@ -325,6 +357,10 @@ function Dashboard({ initialData }: DashboardContainerProps) {
           if (activeMode !== 'notes') setActiveMode('notes');
           setPending({ kind });
           break;
+        case 'recipe':
+          openSection('nutrition', 'recipes');
+          setPending({ kind });
+          break;
         case 'habit':
           if (activeMode !== 'life') setActiveMode('life');
           setTimeout(() => {
@@ -335,7 +371,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
           break;
       }
     },
-    [activeMode, openNewTask, selectedSubjectId, setActiveMode]
+    [activeMode, openNewTask, selectedSubjectId, setActiveMode, openSection]
   );
 
   // ---------------------------------------------------------------- keyboard
@@ -664,6 +700,29 @@ function Dashboard({ initialData }: DashboardContainerProps) {
     [optimistic]
   );
 
+  // ---------------------------------------------------------------- nutrition
+  const handleEatNext = useCallback(
+    async (next: { slot: string; label: string; name: string }) => {
+      if (!data.nutrition) return;
+      try {
+        const result = await api<{ day: { protein: number }; weekGoal: { celebrate: boolean; proteinDays: number } }>('/api/v1/nutrition/logs', {
+          body: { day: data.nutrition.date, slot: next.slot, status: 'eaten' },
+        });
+        fireMilestoneGlow();
+        if (result.weekGoal.celebrate) {
+          setTimeout(fireMilestoneGlow, 450);
+          toast(`🎉 Wochenziel geschafft – Protein an ${result.weekGoal.proteinDays} Tagen!`);
+        } else {
+          toast(`${next.label} abgehakt · heute ${result.day.protein.toLocaleString('de-DE')} g Protein`);
+        }
+        refreshSummary();
+      } catch (error) {
+        toast(`Konnte nicht abgehakt werden: ${errorMessage(error)}`, 'error');
+      }
+    },
+    [data.nutrition, toast, refreshSummary]
+  );
+
   // ---------------------------------------------------------------- bible
   const handleBookmarkSaved = useCallback((bookmark: BibleBookmark) => {
     setData((d) => ({ ...d, bibleBookmarks: [bookmark, ...d.bibleBookmarks.filter((b) => b.id !== bookmark.id)] }));
@@ -873,6 +932,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
       onSaveReminder={handleSaveReminder}
       createRequest={pending?.kind === 'reminder'}
       onCreateRequestHandled={clearPending}
+      onOpenLink={openReminderLink}
     />
   );
 
@@ -951,6 +1011,9 @@ function Dashboard({ initialData }: DashboardContainerProps) {
               <div className="contents xl:col-span-5 xl:flex xl:flex-col xl:gap-6">
                 <Section id="tasks" className="order-1">{taskMatrix}</Section>
                 <Section id="reminders" className="order-2">{remindersHub}</Section>
+                <Section id="meals" className="order-3">
+                  <MealsTodayCard nutrition={data.nutrition} onEatNext={handleEatNext} onOpen={() => openSection('nutrition', 'today')} />
+                </Section>
                 <Section id="upcoming" className="order-3">
                   <UpcomingCard exams={data.exams} birthdays={data.birthdays} onOpenStudy={() => setActiveMode('study')} onOpenLife={() => setActiveMode('life')} />
                 </Section>
@@ -1087,6 +1150,35 @@ function Dashboard({ initialData }: DashboardContainerProps) {
                 </Section>
               </div>
             </div>
+          </>
+        )}
+
+        {activeMode === 'nutrition' && (
+          <>
+            <Section id="mode-header">
+              <ModeHeader
+                mode="nutrition"
+                actions={
+                  <>
+                    <button type="button" onClick={() => openSettings('nutrition')} className="btn-secondary">
+                      <Settings2 className="h-4 w-4" /> Einstellungen
+                    </button>
+                    <button type="button" onClick={() => quickCreate('recipe')} className="btn-primary">
+                      <ChefHat className="h-4 w-4" /> Rezept
+                    </button>
+                  </>
+                }
+              />
+            </Section>
+            <FocusBar mode="nutrition" />
+            <SectionTabs mode="nutrition" />
+            <NutritionHub
+              onChanged={refreshSummary}
+              onOpenShoppingList={() => openSection('life', 'shopping')}
+              onOpenSettings={() => openSettings('nutrition')}
+              createRecipeRequest={pending?.kind === 'recipe'}
+              onCreateRecipeHandled={clearPending}
+            />
           </>
         )}
 
@@ -1318,6 +1410,7 @@ function Dashboard({ initialData }: DashboardContainerProps) {
         onOpenUntis={() => setIsUntisModalOpen(true)}
         onOpenAppleSync={() => setIsAppleSyncOpen(true)}
         onQuickCreate={quickCreate}
+        onOpenSection={openSection}
       />
 
       <TaskModal

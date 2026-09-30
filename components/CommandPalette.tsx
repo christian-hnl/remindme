@@ -20,6 +20,7 @@ import {
   Settings,
   ShoppingCart,
   Sparkles,
+  UtensilsCrossed,
   X,
 } from 'lucide-react';
 import { parseNaturalLanguage, type ParsedIntent } from '@/lib/nlp-parser';
@@ -27,6 +28,7 @@ import { api, errorMessage } from '@/lib/client';
 import { relativeDayLabel } from '@/lib/format';
 import type { Note, Reminder, Task, WorkspaceMode } from '@/types';
 import { MODE_META, MODE_ORDER } from './modes';
+import { sectionsFor } from './sections';
 import type { QuickKind } from './ui/QuickCreateSheet';
 
 interface CommandPaletteProps {
@@ -45,6 +47,8 @@ interface CommandPaletteProps {
   onOpenUntis: () => void;
   onOpenAppleSync: () => void;
   onQuickCreate: (kind: QuickKind) => void;
+  /** Opens a mode with one of its cards focused. */
+  onOpenSection: (mode: WorkspaceMode, sectionId: string) => void;
 }
 
 interface PaletteItem {
@@ -57,10 +61,15 @@ interface PaletteItem {
 }
 
 const PRIORITY_LABEL = { urgent: 'dringend', high: 'wichtig', medium: 'normal', low: 'locker' };
+const MEAL_SLOT_LABEL = { breakfast: 'Frühstück', snack: 'Jause', lunch: 'Mittagessen', afternoon: 'Pre-Workout', dinner: 'Abendessen' };
 const icon = (Icon: typeof Search) => <Icon className="h-[18px] w-[18px] text-ink-3" />;
 
 function describeIntent(intent: ParsedIntent) {
   if (intent.type === 'task') return `Aufgabe „${intent.title}“ anlegen`;
+  if (intent.type === 'meal') {
+    if (intent.protein !== undefined || intent.kcal !== undefined) return `${intent.label} eintragen`;
+    return intent.recipeQuery ? `„${intent.recipeQuery}“ als gegessen abhaken` : `${MEAL_SLOT_LABEL[intent.slot!]} abhaken`;
+  }
   if (intent.type === 'transaction') {
     return `${intent.txType === 'income' ? 'Einnahme' : 'Ausgabe'} „${intent.title}“ · ${intent.amount.toFixed(2)} € buchen`;
   }
@@ -83,6 +92,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onOpenUntis,
   onOpenAppleSync,
   onQuickCreate,
+  onOpenSection,
 }) => {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -192,6 +202,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         })
       );
     items.push(...actions.filter((a) => a.label.toLowerCase().includes(needle)));
+    // Cards of every mode, e.g. "Rezepte" → Ernährung › Rezepte.
+    for (const mode of MODE_ORDER) {
+      for (const section of sectionsFor(mode)) {
+        if (!`${section.label} ${MODE_META[mode].label}`.toLowerCase().includes(needle)) continue;
+        items.push({
+          id: `section-${mode}-${section.id}`,
+          group: 'Bereiche',
+          label: `${MODE_META[mode].label} › ${section.label}`,
+          icon: icon(section.Icon),
+          run: run(() => onOpenSection(mode, section.id)),
+        });
+      }
+    }
   }
 
   const safeIndex = Math.min(activeIndex, Math.max(0, items.length - 1));
@@ -237,7 +260,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               setError(null);
             }}
             onKeyDown={onKeyDown}
-            placeholder="Suchen – oder „Mathe HÜ bis Fr“, „4,50 € Bäcker“"
+            placeholder="Suchen – oder „Mathe HÜ bis Fr“, „gegessen: Teriyaki Bowl“"
             className="h-14 w-full bg-transparent text-[17px] text-ink placeholder:text-ink-3 focus:outline-none"
             aria-label="Suchen oder eintragen"
           />
@@ -272,6 +295,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   </span>
                   <span className="font-bold text-ink">{intent.title}</span>
                   <span className="chip">{intent.category}</span>
+                </>
+              )}
+              {intent.type === 'meal' && (
+                <>
+                  <UtensilsCrossed className="h-3.5 w-3.5 text-ink-3" />
+                  <span className="font-bold text-ink">{intent.recipeQuery ?? intent.label}</span>
+                  {intent.slot && <span className="chip">{MEAL_SLOT_LABEL[intent.slot]}</span>}
+                  {intent.protein !== undefined && <span className="chip font-mono">{intent.protein} g Protein</span>}
+                  {intent.kcal !== undefined && <span className="chip font-mono">{intent.kcal} kcal</span>}
                 </>
               )}
               {intent.type === 'deposit' && (

@@ -62,7 +62,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <nav className="ml-6 hidden h-full items-stretch gap-1 lg:flex" aria-label="Ansichten">
           {MODE_ORDER.map((mode) => {
-            const { label, shortcut: key } = MODE_META[mode];
+            const { label, shortLabel, shortcut: key } = MODE_META[mode];
             const active = activeMode === mode;
             return (
               <button
@@ -75,7 +75,14 @@ export const TopBar: React.FC<TopBarProps> = ({
                   active ? 'text-ink' : 'text-ink-3 hover:text-ink'
                 }`}
               >
-                {label}
+                {shortLabel ? (
+                  <>
+                    <span className="xl:hidden">{shortLabel}</span>
+                    <span className="hidden xl:inline">{label}</span>
+                  </>
+                ) : (
+                  label
+                )}
                 {mode === 'notes' && notesCount > 0 && (
                   <span className="font-mono text-[11px] font-medium text-ink-3">{notesCount}</span>
                 )}

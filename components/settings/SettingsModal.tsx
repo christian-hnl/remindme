@@ -8,6 +8,7 @@ import { useToast } from '@/components/ui/Toast';
 import { WebUntisConfigForm } from '@/components/webuntis/WebUntisConfigForm';
 import { BankingSettings } from './BankingSettings';
 import { VmmSettings } from './VmmSettings';
+import { NutritionSettings } from './NutritionSettings';
 import { api, errorMessage } from '@/lib/client';
 import { parseAmount } from '@/lib/format';
 
@@ -27,7 +28,7 @@ interface SettingsModalProps {
   onBankingChanged: () => void;
 }
 
-export type SettingsTab = 'profile' | 'school' | 'marks' | 'subjects' | 'banks' | 'data';
+export type SettingsTab = 'profile' | 'school' | 'marks' | 'subjects' | 'nutrition' | 'banks' | 'data';
 type Tab = SettingsTab;
 
 interface SubjectDraft {
@@ -45,6 +46,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'school', label: 'WebUntis' },
   { id: 'marks', label: 'Noten (VMM)' },
   { id: 'subjects', label: 'Fächer' },
+  { id: 'nutrition', label: 'Ernährung' },
   { id: 'banks', label: 'Banken' },
   { id: 'data', label: 'Daten' },
 ];
@@ -278,6 +280,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
           </div>
         )}
+
+        {tab === 'nutrition' && <NutritionSettings onSaved={onSettingsSaved} />}
 
         {tab === 'banks' && <BankingSettings banking={banking} onChanged={onBankingChanged} />}
 

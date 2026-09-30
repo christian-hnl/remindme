@@ -58,7 +58,16 @@ export interface MonthBar {
   isCurrent: boolean;
 }
 
-export function MonthlyBars({ months }: { months: MonthBar[] }) {
+export interface BarLegend {
+  income: string;
+  expenses: string;
+  /** Positive net is good (green) by default; flip for "less spent than planned". */
+  netLabel?: string;
+}
+
+const DEFAULT_LEGEND: BarLegend = { income: 'Ein', expenses: 'Aus' };
+
+export function MonthlyBars({ months, legend = DEFAULT_LEGEND }: { months: MonthBar[]; legend?: BarLegend }) {
   const [selected, setSelected] = useState(months.length - 1);
   const max = Math.max(1, ...months.map((m) => Math.max(m.income, m.expenses)));
   const active = months[selected] ?? months[months.length - 1];
@@ -73,7 +82,7 @@ export function MonthlyBars({ months }: { months: MonthBar[] }) {
             role="listitem"
             onClick={() => setSelected(i)}
             onMouseEnter={() => setSelected(i)}
-            aria-label={`${m.label}: Einnahmen ${formatEuro(m.income)}, Ausgaben ${formatEuro(m.expenses)}`}
+            aria-label={`${m.label}: ${legend.income} ${formatEuro(m.income)}, ${legend.expenses} ${formatEuro(m.expenses)}`}
             aria-pressed={selected === i}
             className={`group flex h-full min-w-0 flex-1 flex-col justify-end rounded-[6px] px-0.5 pb-0.5 transition-colors ${selected === i ? 'bg-inset' : ''}`}
           >
@@ -98,18 +107,18 @@ export function MonthlyBars({ months }: { months: MonthBar[] }) {
         <dl className="mt-3 grid grid-cols-3 gap-2 rounded-[10px] bg-inset px-3 py-2.5 text-[13px]">
           <div>
             <dt className="flex items-center gap-1.5 text-ink-3">
-              <span className="h-2 w-2 rounded-full bg-leaf" /> Ein
+              <span className="h-2 w-2 rounded-full bg-leaf" /> {legend.income}
             </dt>
             <dd className="font-mono font-medium text-ink tabular">{formatEuro(active.income, 0)}</dd>
           </div>
           <div>
             <dt className="flex items-center gap-1.5 text-ink-3">
-              <span className="h-2 w-2 rounded-full bg-accent" /> Aus
+              <span className="h-2 w-2 rounded-full bg-accent" /> {legend.expenses}
             </dt>
             <dd className="font-mono font-medium text-ink tabular">{formatEuro(active.expenses, 0)}</dd>
           </div>
           <div>
-            <dt className="text-ink-3">{active.isCurrent ? `${active.label} (läuft)` : active.label}</dt>
+            <dt className="text-ink-3">{legend.netLabel ?? (active.isCurrent ? `${active.label} (läuft)` : active.label)}</dt>
             <dd className={`font-mono font-medium tabular ${active.net >= 0 ? 'text-leaf' : 'text-pen'}`}>
               {active.net >= 0 ? '+' : '−'}
               {formatEuro(Math.abs(active.net), 0)}
@@ -160,9 +169,26 @@ export function WeekdayBars({ days }: { days: { label: string; avgPerDay: number
 // ------------------------------------------------------------------ forecast line
 
 /** Lines scale with the container; dots and labels are HTML so they never distort. */
-export function ForecastLine({ points }: { points: { label: string; balance: number }[] }) {
+export function ForecastLine({
+  points,
+  unit = '€',
+  digits = 0,
+  fromZero = true,
+  label = 'Kontostand-Prognose',
+  dashed = true,
+}: {
+  points: { label: string; balance: number }[];
+  unit?: string;
+  digits?: number;
+  /** Money charts start at 0; a weight trend reads better zoomed to its range. */
+  fromZero?: boolean;
+  label?: string;
+  /** Everything after the first point is a forecast (dashed). Off for measured trends. */
+  dashed?: boolean;
+}) {
   const values = points.map((p) => p.balance);
-  let min = Math.min(0, ...values);
+  const fmt = (v: number) => `${v.toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${unit}`;
+  let min = fromZero ? Math.min(0, ...values) : Math.min(...values) - 1;
   let max = Math.max(...values, 1);
   if (max - min < 1) {
     max += 1;
@@ -175,12 +201,12 @@ export function ForecastLine({ points }: { points: { label: string; balance: num
   const last = points.length - 1;
 
   return (
-    <div role="img" aria-label={`Kontostand-Prognose: von ${Math.round(values[0])} auf ${Math.round(values[last])} Euro`}>
+    <div role="img" aria-label={`${label}: von ${fmt(values[0])} auf ${fmt(values[last])}`}>
       <div className="relative h-36">
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full overflow-visible" aria-hidden>
-          {min < 0 && <line x1={pad} x2={100 - pad} y1={y(0)} y2={y(0)} className="stroke-pen/50" strokeDasharray="4 4" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
-          <polyline points={coords.slice(0, 2).join(' ')} fill="none" className="stroke-accent" strokeWidth={2.5} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-          <polyline points={coords.slice(1).join(' ')} fill="none" className="stroke-accent" strokeWidth={2.5} strokeDasharray="6 6" opacity={0.6} vectorEffect="non-scaling-stroke" />
+          {fromZero && min < 0 && <line x1={pad} x2={100 - pad} y1={y(0)} y2={y(0)} className="stroke-pen/50" strokeDasharray="4 4" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
+          <polyline points={(dashed ? coords.slice(0, 2) : coords).join(' ')} fill="none" className="stroke-accent" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          {dashed && <polyline points={coords.slice(1).join(' ')} fill="none" className="stroke-accent" strokeWidth={2.5} strokeDasharray="6 6" opacity={0.6} vectorEffect="non-scaling-stroke" />}
         </svg>
         {points.map((p, i) => (
           <span
@@ -190,13 +216,13 @@ export function ForecastLine({ points }: { points: { label: string; balance: num
           />
         ))}
         <span className="absolute -translate-y-full whitespace-nowrap pb-1.5 font-mono text-[11px] text-ink-2 tabular" style={{ left: `${x(0)}%`, top: `${y(values[0])}%` }}>
-          {Math.round(values[0]).toLocaleString('de-DE')} €
+          {fmt(values[0])}
         </span>
         <span
           className={`absolute -translate-x-full -translate-y-full whitespace-nowrap pb-1.5 font-mono text-[11px] font-bold tabular ${values[last] < 0 ? 'text-pen' : 'text-ink'}`}
           style={{ left: `${x(last)}%`, top: `${y(values[last])}%` }}
         >
-          {Math.round(values[last]).toLocaleString('de-DE')} €
+          {fmt(values[last])}
         </span>
       </div>
       <div className="relative mt-1 h-4">

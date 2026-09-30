@@ -16,7 +16,7 @@ interface MobileDockProps {
   focusedSection: string | null;
 }
 
-const LEFT: WorkspaceMode[] = ['all', 'study', 'life'];
+const LEFT: WorkspaceMode[] = ['all', 'study', 'life', 'nutrition'];
 const RIGHT: WorkspaceMode[] = ['wealth', 'skills', 'bible', 'notes'];
 
 export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMode, onOpenQuickAdd, onOpenSection, focusedSection }) => {
@@ -38,7 +38,7 @@ export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMod
   };
 
   const item = (mode: WorkspaceMode) => {
-    const { label, Icon } = MODE_META[mode];
+    const { label, shortLabel, Icon } = MODE_META[mode];
     const active = activeMode === mode;
     const hasSections = sectionsFor(mode).length > 0;
     return (
@@ -54,7 +54,7 @@ export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMod
       >
         {active && <span className="absolute top-0 h-[3px] w-8 rounded-b-full bg-accent" aria-hidden />}
         <Icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.3 : 1.8} />
-        {label}
+        {shortLabel ?? label}
         {hasSections && active && <span className="absolute bottom-1 h-[3px] w-[3px] rounded-full bg-ink-3" aria-hidden />}
       </button>
     );
@@ -108,7 +108,7 @@ export const MobileDock: React.FC<MobileDockProps> = ({ activeMode, setActiveMod
           </div>
         )}
 
-        <div className="mx-auto grid max-w-lg grid-cols-8 items-center px-0.5">
+        <div className="mx-auto grid max-w-lg grid-cols-9 items-center px-0.5">
           {LEFT.map(item)}
           <div className="flex justify-center">
             <button
